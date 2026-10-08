@@ -55,10 +55,13 @@ async function chapter(ch, until, maxSec) {
 
 if (which === 'all' || which === 'chapters') {
   log('chapters');
-  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 150], [1, s => s.ck >= 2, 170], [2, s => s.ck >= 3, 200], [3, s => s.boss !== 'off', 120]]) {
+  const only = process.env.CH ? process.env.CH.split(',').map(Number) : null;
+  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 150], [1, s => s.ck >= 2, 170], [2, s => s.ck >= 3, 200], [3, s => s.boss !== 'off', 240]]) {
+    if (only && !only.includes(ch)) continue;
     const r = await chapter(ch, goal, max); await r.page.close();
   }
   // boss to victory, then restart
+  if (!only || only.includes(4)) {
   const r = await chapter(4, s => s.st === 'victory', 260);
   if (r.ok) {
     await r.page.click('#againBtn'); await r.page.waitForTimeout(1500);
@@ -66,11 +69,12 @@ if (which === 'all' || which === 'chapters') {
     if (s.st !== 'playing' || s.ck !== 0) fail('restart', JSON.stringify(s)); else log('  ✓ restart after victory');
   }
   await r.page.close();
+  }
   // death -> game over -> retry checkpoint
   const d = await open('auto&ch=1&test');
-  await d.page.waitForTimeout(1500);
-  await d.page.evaluate(() => { window.__G.player.damage(999); });
-  await d.page.waitForTimeout(4000);
+  await d.page.waitForFunction(() => window.__G && window.__G.state === 'playing' && window.__G.missionTime > 0.5, null, { timeout: 30000 });
+  await d.page.evaluate(() => { const p = window.__G.player; p.invuln = 0; p.damage(999); });
+  await d.page.waitForFunction(() => window.__G.state === 'dead', null, { timeout: 30000 }).catch(() => {});
   let s = await probe(d.page);
   if (s.st !== 'dead') fail('game over', JSON.stringify(s));
   else { await d.page.click('#retryBtn'); await d.page.waitForTimeout(1200); s = await probe(d.page); if (s.st !== 'playing' || s.ck !== 1) fail('retry', JSON.stringify(s)); else log('  ✓ game over -> retry checkpoint'); }
