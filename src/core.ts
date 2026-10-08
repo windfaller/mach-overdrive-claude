@@ -25,7 +25,7 @@ export function slowmo(scale: number, dur: number) {
   G.slowTime = Math.max(G.slowTime, dur);
 }
 export function hitstop(dur: number) { G.hitstopTime = Math.max(G.hitstopTime, dur); }
-export function shake(a: number) { G.trauma = Math.min(1.2, G.trauma + a); }
+export function shake(a: number) { G.trauma = Math.min(1.2, G.trauma + a); if (G.onShake && a > 0.08) G.onShake(a); }
 export function flash(a: number, r = 1, g = 1, b = 1) { G.flash = Math.max(G.flash, a); G.flashColor.setRGB(r, g, b); }
 
 export interface Target {

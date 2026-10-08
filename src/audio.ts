@@ -58,9 +58,15 @@ function noise(t: number, dur: number, vol: number, type: BiquadFilterType, f0: 
   s.start(t, Math.random() * 1.5); s.stop(t + a + dur + 0.05);
 }
 
-export const sfx = {
+/** Three-band hit: sub thump, mid body, high transient — the base of every heavy sound. */
+function impact(t: number, sub: number, mid: number, hi: number, len = 1) {
+  if (sub) { osc('sine', 110, 32, t, 0.35 * len, sub); }
+  if (mid) { noise(t, 0.18 * len, mid, 'bandpass', 900, 250, 1.2, 0.002); osc('triangle', 260, 120, t, 0.12 * len, mid * 0.4); }
+  if (hi) noise(t, 0.05, hi, 'highpass', 6000, 3500, 0.8, 0.001);
+}
+const proc = {
   laser() { if (!ctx || !gate('laser', 45)) return; const t = now();
-    osc('square', 1400, 260, t, 0.07, 0.05); osc('sine', 2600, 900, t, 0.05, 0.04); noise(t, 0.04, 0.05, 'highpass', 5000, 3000); },
+    osc('square', 1400, 260, t, 0.07, 0.05); osc('sine', 2600, 900, t, 0.05, 0.04); noise(t, 0.04, 0.05, 'highpass', 5000, 3000); osc('sine', 180, 90, t, 0.06, 0.08); },
   hit() { if (!ctx || !gate('hit', 30)) return; const t = now(); noise(t, 0.06, 0.12, 'bandpass', 3200, 1500, 2); osc('square', 700, 300, t, 0.04, 0.03); },
   ping() { if (!ctx || !gate('ping', 60)) return; const t = now(); osc('triangle', 3000, 2400, t, 0.08, 0.03); },
   explosion(size = 1, vol = 1) {
@@ -72,27 +78,30 @@ export const sfx = {
     if (size > 2) { noise(t + 0.08, 1.4, 0.35 * v, 'lowpass', 900, 50, 0.5, 0.05); osc('sawtooth', 60, 20, t, 1.2, 0.2 * v); }
   },
   missile() { if (!ctx || !gate('msl', 25)) return; const t = now();
-    noise(t, 0.5, 0.16, 'bandpass', 500, 2600, 1.5, 0.01); osc('sawtooth', 180, 90, t, 0.25, 0.04); },
-  lockTick() { if (!ctx || !gate('lk', 40)) return; const t = now(); osc('sine', 1900, 1900, t, 0.04, 0.07); },
-  locked() { if (!ctx) return; const t = now(); osc('square', 2400, 2400, t, 0.05, 0.04); osc('square', 2400, 2400, t + 0.08, 0.05, 0.04); },
+    impact(t, 0.25, 0.1, 0.12, 0.5); noise(t + 0.02, 0.55, 0.18, 'bandpass', 400, 2800, 1.5, 0.01); osc('sawtooth', 180, 90, t, 0.25, 0.04); },
+  lockTick(n = 1) { if (!ctx || !gate('lk', 40)) return; const t = now(); const f = 900 * Math.pow(2, n * 2 / 12); osc('sine', f, f, t, 0.05, 0.08); osc('square', f * 2, f * 2, t, 0.02, 0.02); },
+  locked() { if (!ctx) return; const t = now(); [1760, 2217, 2637].forEach((f, i) => osc('square', f, f, t + i * 0.05, 0.12, 0.035)); osc('sine', 3520, 3520, t + 0.15, 0.3, 0.04); },
+  chainKill(n = 1) { if (!ctx || !gate('chain', 50)) return; const t = now(); const f = 660 * Math.pow(2, Math.min(n, 12) / 12); osc('triangle', f, f * 1.5, t, 0.15, 0.06); impact(t, 0.2, 0, 0.06, 0.6); },
   melee() { if (!ctx) return; const t = now();
     noise(t, 0.22, 0.4, 'bandpass', 1500, 6000, 2, 0.02);
     [523, 1307, 2140, 3011].forEach((f, i) => osc('sine', f, f * 0.98, t + 0.03, 0.6 - i * 0.1, 0.06)); },
   slashHit() { if (!ctx) return; const t = now();
-    noise(t, 0.3, 0.5, 'highpass', 2500, 800, 1, 0.001); osc('sine', 90, 30, t, 0.4, 0.6); osc('sawtooth', 1200, 200, t, 0.15, 0.08); },
+    impact(t, 0.7, 0.35, 0.3); noise(t, 0.3, 0.5, 'highpass', 2500, 800, 1, 0.001); osc('sawtooth', 1200, 200, t, 0.15, 0.08); },
   boost() { if (!ctx || !gate('boost', 300)) return; const t = now();
-    noise(t, 0.8, 0.35, 'bandpass', 300, 3000, 1.2, 0.05); osc('sawtooth', 80, 240, t, 0.6, 0.08); },
+    impact(t, 0.45, 0.12, 0); noise(t, 0.8, 0.35, 'bandpass', 300, 3000, 1.2, 0.05); osc('sawtooth', 80, 240, t, 0.6, 0.08); },
   dodge() { if (!ctx) return; const t = now(); noise(t, 0.25, 0.25, 'bandpass', 3000, 600, 2, 0.01); },
   perfect() { if (!ctx) return; const t = now();
     noise(t, 0.3, 0.4, 'highpass', 200, 6000, 1, 0.25);
     [880, 1320, 1760, 2640].forEach((f, i) => osc('sine', f, f, t + 0.25, 1.6, 0.09 - i * 0.015));
     osc('sine', 110, 40, t + 0.25, 1.0, 0.5); },
-  nearMiss() { if (!ctx || !gate('nm', 150)) return; const t = now(); noise(t, 0.35, 0.3, 'bandpass', 4000, 400, 3, 0.03); },
+  nearMiss() { if (!ctx || !gate('nm', 150)) return; const t = now(); noise(t, 0.35, 0.3, 'bandpass', 4000, 400, 3, 0.03); osc('sawtooth', 900, 300, t, 0.25, 0.03); },
   gate() { if (!ctx) return; const t = now(); [660, 990, 1320].forEach((f, i) => osc('triangle', f, f * 1.5, t + i * 0.05, 0.25, 0.08)); },
   damage() { if (!ctx || !gate('dmg', 80)) return; const t = now(); osc('square', 140, 50, t, 0.25, 0.25); noise(t, 0.3, 0.4, 'lowpass', 3000, 200, 1); },
   warning() { if (!ctx) return; const t = now(); for (let i = 0; i < 4; i++) { osc('square', 880, 880, t + i * 0.36, 0.16, 0.06); osc('square', 660, 660, t + i * 0.36 + 0.18, 0.16, 0.06); } },
   alarm() { if (!ctx || !gate('alarm', 500)) return; const t = now(); osc('sawtooth', 1200, 600, t, 0.3, 0.05); },
-  bossWarning() { if (!ctx) return; const t = now();
+  ravenWarn() { if (!ctx) return; const t = now(); impact(t, 0.6, 0.3, 0.2, 1.5); for (let i = 0; i < 3; i++) { osc('sawtooth', 300, 1500, t + 0.15 + i * 0.22, 0.18, 0.06); } osc('square', 90, 60, t, 1.2, 0.1); },
+  finisher() { if (!ctx) return; const t = now(); impact(t, 1, 0.6, 0.5, 2.5); osc('sawtooth', 40, 25, t, 2.5, 0.35); [523, 784, 1047, 1568].forEach((f, i) => osc('sine', f, f * 1.01, t + 0.05, 2.5 - i * 0.3, 0.05)); noise(t, 2.2, 0.4, 'lowpass', 5000, 60, 0.6, 0.01); },
+  bossWarning() { if (!ctx) return; const t = now(); impact(t, 0.8, 0.2, 0, 3); impact(t + 2.2, 0.8, 0.2, 0, 3);
     for (let k = 0; k < 2; k++) { const s = t + k * 2.2; osc('sawtooth', 65, 65, s, 1.8, 0.35, sfxBus, 0.4); osc('sawtooth', 97.5, 97.5, s, 1.8, 0.25, sfxBus, 0.4); osc('sawtooth', 130, 129, s, 1.8, 0.15, sfxBus, 0.4); } },
   transform() { if (!ctx) return; const t = now();
     osc('sawtooth', 50, 700, t, 5.5, 0.18, sfxBus, 0.5); osc('square', 75, 900, t + 0.5, 5, 0.06, sfxBus, 0.5);
@@ -107,9 +116,25 @@ export const sfx = {
   ui() { if (!ctx) return; const t = now(); osc('square', 1200, 1800, t, 0.06, 0.05); },
 };
 
-export function setEngine(speed01: number, boosting: boolean, on: boolean) {
+type SfxName = keyof typeof proc;
+// ---- asset replacement hook: a loaded sample for a name plays instead of the synthesized version
+const samples: Partial<Record<string, AudioBuffer>> = {};
+export async function loadSamples(map: Record<string, string>) {
+  initAudio(); if (!ctx) return;
+  await Promise.all(Object.entries(map).map(async ([k, url]) => {
+    try { const r = await fetch(url); if (r.ok) samples[k] = await ctx.decodeAudioData(await r.arrayBuffer()); } catch (e) { console.warn('sample', k, e); }
+  }));
+}
+function playSample(b: AudioBuffer, vol = 1) { const s = ctx.createBufferSource(); s.buffer = b; const g = ctx.createGain(); g.gain.value = vol; s.connect(g); g.connect(sfxBus); s.start(); }
+export const sfx = new Proxy(proc, { get(o, k: string) { const f = (o as any)[k]; return (...a: any[]) => { const b = samples[k]; if (b && ctx) { if (gate('smp' + k, 30)) playSample(b); } else if (f) f(...a); }; } }) as typeof proc;
+export type { SfxName };
+export function suspendAudio(on: boolean) { if (!ctx) return; if (on) ctx.suspend(); else ctx.resume(); }
+/** Pull everything down for a beat of silence (finisher), then restore. */
+export function duck(on: boolean, time = 0.15) { if (!ctx) return; master.gain.setTargetAtTime(on ? 0.08 : 0.8, now(), time); }
+
+export function setEngine(speed01: number, boosting: boolean, on: boolean, vfx = 0.5) {
   if (!ctx) return; const t = now();
-  const s = Math.min(1.5, speed01);
+  const s = Math.min(1.5, speed01 * (0.75 + vfx * 0.4));
   engOsc1.frequency.setTargetAtTime(45 + s * 70, t, 0.1);
   engOsc2.frequency.setTargetAtTime(45.8 + s * 72, t, 0.1);
   engFilter.frequency.setTargetAtTime(200 + s * 900 + (boosting ? 800 : 0), t, 0.1);

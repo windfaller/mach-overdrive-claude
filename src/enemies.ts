@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { G, rand, clamp, damp, lerp, segSphere, shake, Target, easeOut } from './core';
-import { buildDrone, buildFighter, buildHeavy, buildMech, buildBattleshipHalf, glow, mats, Mech } from './models';
+import { G, rand, clamp, damp, lerp, segSphere, shake, Target, easeOut, slowmo, flash } from './core';
+import { mapMech } from './assets';
+import { buildDrone, buildFighter, buildHeavy, buildMech, buildBattleshipHalf, glow, mats, Mech, additive } from './models';
 import { fx, Ribbon } from './fx';
 import { sfx } from './audio';
 
-const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), look = new THREE.Object3D();
+const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), look = new THREE.Object3D(); const RAVEN_GLOW = new THREE.Color(3, 0.25, 0.7);
 const STATS: Record<string, { hp: number; r: number; locks: number; score: number; boom: number }> = {
   drone: { hp: 16, r: 2.2, locks: 1, score: 100, boom: 1.1 },
   fighter: { hp: 40, r: 2.6, locks: 1, score: 200, boom: 1.4 },
@@ -40,6 +41,7 @@ export class Enemies {
   orbs: Orb[] = []; orbMesh: THREE.InstancedMesh; bigOrbMesh: THREE.InstancedMesh; missiles: EMissile[] = []; mslMesh: THREE.InstancedMesh;
   m4 = new THREE.Matrix4(); q = new THREE.Quaternion(); sv = new THREE.Vector3(1, 1, 1);
   ship: { g: THREE.Group; halves: THREE.Group[]; core: Enemy; state: string; t: number; fireT: number } | null = null;
+  rGhosts: { g: THREE.Group; mat: THREE.MeshBasicMaterial; t: number }[] = []; rRibs: (Ribbon | null)[] = []; camP = new THREE.Vector3(); camL = new THREE.Vector3(); ghostT = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -48,8 +50,8 @@ export class Enemies {
     mk('drone', 40, () => buildDrone(gD));
     mk('fighter', 14, () => { const g = new THREE.Group(); g.add(buildFighter(gF)); return g; });
     mk('heavy', 6, () => { const g = new THREE.Group(); g.add(buildHeavy(gH)); return g; });
-    mk('elite', 1, () => { const m = buildMech([3, 0.25, 0.7], mats.dark, mats.enemyMid, [3, 0.4, 0.8]); m.root.scale.setScalar(1.5); m.root.rotation.y = Math.PI; const g = new THREE.Group(); g.add(m.root); (g as any).mech = m; return g; });
-    const e = this.pools.elite[0]; e.mech = (e.mesh as any).mech;
+    mk('elite', 1, () => { const m = buildMech([3, 0.25, 0.7], mats.dark, mats.enemyMid, [3, 0.4, 0.8], 'raven'); m.root.scale.setScalar(1.5); m.root.rotation.y = Math.PI; const g = new THREE.Group(); g.add(m.root); (g as any).mech = m; return g; });
+    const e = this.pools.elite[0]; e.mech = (e.mesh as any).mech; this.buildRavenGhosts();
     // orbs
     const om = new THREE.MeshBasicMaterial(); om.color.setRGB(4, 0.9, 0.35);
     this.orbMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.75, 1), om, 400); this.orbMesh.count = 0; this.orbMesh.frustumCulled = false; scene.add(this.orbMesh);
@@ -68,6 +70,22 @@ export class Enemies {
     sg.visible = false; scene.add(sg); scene.add(coreG);
     const ce = new Enemy('shipcore', coreG); this.ship = { g: sg, halves: [hh1, hh2], core: ce, state: 'off', t: 0, fireT: 0 };
   }
+  buildRavenGhosts() {
+    const e = this.pools.elite[0];
+    for (const g of this.rGhosts) this.scene.remove(g.g); this.rGhosts = [];
+    for (let i = 0; i < 6; i++) {
+      const mat = additive(2.4, 0.3, 0.8, 0.5); const g = e.mesh.clone(true);
+      g.traverse(o => { const ms = o as THREE.Mesh; if (ms.isMesh) { if ((ms.material as THREE.Material).type === 'MeshBasicMaterial') ms.userData.ghostHide = true; ms.material = mat; } if (o.userData.proc) o.children.forEach((c, k) => { if (k > 0) c.userData.ghostHide = true; }); });
+      g.visible = false; this.scene.add(g); this.rGhosts.push({ g, mat, t: 0 });
+    }
+  }
+  applyRavenModel(src: THREE.Object3D) { const e = this.pools.elite[0]; if (mapMech(e.mech!, src)) this.buildRavenGhosts(); }
+  ravenGhost(e: Enemy, a = 0.5) {
+    const gh = this.rGhosts.find(g => g.t <= 0) || this.rGhosts[0]; if (!gh) return;
+    gh.t = 0.35; gh.mat.opacity = a; gh.g.visible = true; gh.g.position.copy(e.mesh.position); gh.g.quaternion.copy(e.mesh.quaternion);
+    const src: THREE.Object3D[] = [], dst: THREE.Object3D[] = []; e.mesh.traverse(o => src.push(o)); gh.g.traverse(o => dst.push(o));
+    for (let i = 1; i < src.length && i < dst.length; i++) { dst[i].position.copy(src[i].position); dst[i].quaternion.copy(src[i].quaternion); dst[i].visible = src[i].visible && !dst[i].userData.ghostHide; }
+  }
   get list() { return this.active; }
   count(kind?: string) { let n = 0; for (const e of this.active) if (e.alive && (!kind || e.kind === kind)) n++; return n; }
   spawn(kind: string, d: any = {}): Enemy | null {
@@ -75,7 +93,10 @@ export class Enemies {
     const s = STATS[kind]; e.hp = e.maxHp = s.hp * (d.hpMul || 1); e.radius = s.r; e.maxLocks = s.locks; e.locks = 0; e.age = 0; e.alive = true; e.lockable = true;
     e.d = { ...d, shoot: d.shoot ?? true }; e.vel.set(0, 0, 0); e.flashT = 0; e.mesh.visible = true; e.mesh.scale.setScalar(1);
     if (d.from) e.pos.copy(d.from); else e.pos.set(0, 0, -500);
-    if (kind === 'elite') { e.d.state = 'enter'; e.d.t = 0; e.d.dodgeCd = 0; e.d.atk = 0; e.d.target = new THREE.Vector3(0, 6, -60); }
+    if (kind === 'elite') {
+      e.d.state = 'enter'; e.d.t = 0; e.d.dodgeCd = 0; e.d.atk = 0; e.d.target = new THREE.Vector3(0, 6, -60);
+      this.rRibs = [];
+    }
     this.active.push(e); return e;
   }
   kill(e: Enemy, src: string) {
@@ -83,6 +104,12 @@ export class Enemies {
     const s = STATS[e.kind];
     tmp.copy(e.vel); tmp.z = Math.min(tmp.z, 0);
     fx.explosion(e.pos, s.boom, tmp, { debris: Math.round(s.boom * 3) });
+    if (e.kind === 'elite') {
+      slowmo(0.3, 1.1); flash(0.5, 1, 0.45, 0.3); shake(1); fx.ring(e.pos, 2, 60, 0.7, 3, 0.6, 1.2); fx.ring(e.pos, 2, 35, 0.5, 3, 2, 2);
+      fx.explosion(e.pos, 4, undefined, { debris: 24 }); sfx.explosion(4);
+      for (const r of this.rRibs) if (r) r.fading = true; this.rRibs = [];
+      if (G.camRig && G.camRig.owner === 'raven') { G.camRig = null; G.cinematic = false; }
+    }
     if (e.kind === 'heavy' || e.kind === 'elite') {
       for (let i = 0; i < (e.kind === 'elite' ? 6 : 3); i++) { const p = e.pos.clone().add(new THREE.Vector3(rand(-5, 5), rand(-4, 4), rand(-4, 4))); fx.later(0.12 + i * 0.12, () => fx.explosion(p, 1.4)); }
     }
@@ -109,7 +136,7 @@ export class Enemies {
     m.rib = fx.ribbon(); if (m.rib) m.rib.start(from.x, from.y, from.z, 0.3, 2.4, 0.6, 0.3, 0.9, 1);
   }
   clear() {
-    for (const e of this.active) { e.alive = false; e.mesh.visible = false; } this.active.length = 0;
+    for (const e of this.active) { e.alive = false; e.mesh.visible = false; } this.active.length = 0; this.rRibs = []; for (const g of this.rGhosts) { g.t = 0; g.g.visible = false; }
     for (const o of this.orbs) o.alive = false; for (const m of this.missiles) { m.alive = false; m.rib = null; }
     if (this.ship) { this.ship.state = 'off'; this.ship.g.visible = false; this.ship.core.alive = false; this.ship.core.mesh.visible = false; }
   }
@@ -148,11 +175,11 @@ export class Enemies {
     const base = s.g.position.clone();
     for (let i = 0; i < 14; i++) fx.later(i * 0.11, () => { const p = new THREE.Vector3(-90 + i * 14, rand(-5, 10), 13); s.g.localToWorld(p); fx.explosion(p, 3 + (i % 3), undefined, { debris: 5 }); });
     fx.explosion(base.add(tmp.set(0, -6, 14)), 7, undefined, { debris: 30 });
-    G.hud.big('BATTLESHIP DESTROYED', 'kill'); shake(1);
+    G.hud.big('b_shipDown', 'kill'); shake(1);
   }
   eliteEvade(e: Enemy) {
     e.d.dodgeCd = 1.6; e.d.state = 'evade'; e.d.t = 0; e.d.evDir = (e.pos.x > G.player.pos.x ? 1 : -1) * (Math.random() < 0.25 ? -1 : 1);
-    sfx.dodge(); G.hud.small('ELITE EVADES', 'warn');
+    sfx.dodge(); G.hud.small('m_evade', 'warn'); this.ravenGhost(e, 0.6);
   }
   // ---------------- per-type AI ----------------
   ai(e: Enemy, dt: number) {
@@ -193,41 +220,62 @@ export class Enemies {
   eliteAI(e: Enemy, dt: number) {
     const d = e.d, P = G.player.pos, m = e.mech!; d.t += dt; d.dodgeCd -= dt;
     const goto = (target: THREE.Vector3, k: number) => { e.pos.x = damp(e.pos.x, target.x, k, dt); e.pos.y = damp(e.pos.y, target.y, k, dt); e.pos.z = damp(e.pos.z, target.z, k, dt); };
-    if (d.state === 'enter') { goto(tmp.set(0, 8, -70), 2.5); if (d.t > 2) { d.state = 'strafe'; d.t = 0; } }
+    if (d.state === 'enter') {
+      // 2.6 s entrance: drop in on a long lens, flare, name card, then hand control back
+      const u = easeOut(clamp(d.t / 2.2, 0, 1)); e.pos.lerpVectors(tmp.set(0, 70, -420), tmp2.set(0, 8, -70), u);
+      if (!d.cine) { d.cine = true; G.cinematic = true; sfx.ravenWarn(); }
+      this.camP.set(P.x - 2.2, P.y + 0.9, P.z + 7.5); this.camL.copy(e.pos); G.camRig = { pos: this.camP, look: this.camL, fov: lerp(28, 46, u), owner: 'raven' };
+      if (d.t > 1.5 && !d.flare) { d.flare = true; G.hud.big('b_raven', 'boss', 2); m.glowMat.color.setRGB(9, 1, 2.5); fx.ring(e.pos, 2, 30, 0.5, 3, 0.4, 1); shake(0.4); sfx.boost(); }
+      if (d.flare) m.glowMat.color.lerp(RAVEN_GLOW, 1 - Math.exp(-3 * dt));
+      if (Math.random() < 0.9) { m.flames[0].getWorldPosition(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 60, 30, 0.3, 2.5, 0.4, 3, 0.5, 1, 1, 0.1, 0.3, 0.9, 1, 0, 0.03, 0, 1); }
+      if (d.t > 2.6) { d.state = 'strafe'; d.t = 0; this.rRibs = m.flames.map(f => { const r = fx.ribbon(); f.getWorldPosition(tmp); if (r) r.start(tmp.x, tmp.y, tmp.z, 0.16, 2.6, 0.35, 0.9, 0.45, 1); return r; }); if (G.camRig && G.camRig.owner === 'raven') G.camRig = null; G.cinematic = false; }
+    }
     else if (d.state === 'strafe') {
       if (d.t > 1.6 || !d.tp) { d.tp = new THREE.Vector3(rand(-26, 26), rand(-8, 16), rand(-85, -55)); if (d.t > 1.6) { d.t = 0; d.atk++; d.state = ['rifle', 'missiles', 'melee', 'rifle', 'melee'][d.atk % 5]; } }
       goto(d.tp, 3);
     } else if (d.state === 'evade') {
-      e.pos.x += d.evDir * 90 * (1 - d.t / 0.35) * dt; if (Math.random() < 0.6) { fx.add.emit(e.pos.x, e.pos.y, e.pos.z, 0, 0, 0, 0.3, 4, 1, 3, 0.3, 0.8, 1, 0.1, 0.3, 0.6, 0, 0, 0, 0.3, 0); }
+      e.pos.x += d.evDir * 90 * (1 - d.t / 0.35) * dt; this.ghostT -= dt; if (this.ghostT <= 0) { this.ghostT = 0.05; this.ravenGhost(e, 0.45); } if (Math.random() < 0.6) { fx.add.emit(e.pos.x, e.pos.y, e.pos.z, 0, 0, 0, 0.3, 4, 1, 3, 0.3, 0.8, 1, 0.1, 0.3, 0.6, 0, 0, 0, 0.3, 0); }
       if (d.t > 0.35) { d.state = 'strafe'; d.t = 0; }
     } else if (d.state === 'rifle') {
       goto(d.tp, 2);
       if (d.t > 0.4 && Math.floor(d.t * 8) !== Math.floor((d.t - dt) * 8) && d.t < 1.8) { m.gunTip.getWorldPosition(tmp); this.fireOrb(tmp, P, 140, 6, false, 0.015); fx.muzzle(tmp, 3, 0.4, 1); }
       if (d.t > 2.2) { d.state = 'strafe'; d.t = 0; }
     } else if (d.state === 'missiles') {
-      if (d.t > 0.3 && !d.fired) { d.fired = true; for (let k = 0; k < 6; k++) fx.later(k * 0.08, () => { if (e.alive) this.fireMissile(tmp2.copy(e.pos).add(tmp.set(0, 3, 0)), tmp.set((k - 2.5) * 22, rand(25, 45), 20), 2.4); }); sfx.missile(); }
+      if (d.t > 0.3 && !d.fired) { d.fired = true; for (let k = 0; k < 6; k++) fx.later(k * 0.08, () => { if (!e.alive) return; (k % 2 ? m.podR : m.podL).getWorldPosition(tmp2); fx.add.emit(tmp2.x, tmp2.y, tmp2.z, 0, 0, 0, 0.1, 3, 0.6, 3, 1.2, 0.6, 2, 0.3, 0.2, 1, 0, 0, 0, 0, 1); this.fireMissile(tmp2, tmp.set((k - 2.5) * 22, rand(25, 45), 20), 2.4); }); sfx.missile(); }
       if (d.t > 1.4) { d.state = 'strafe'; d.t = 0; d.fired = false; }
     } else if (d.state === 'melee') {
       // telegraph -> dash -> slash
-      if (d.t < 0.9) { goto(tmp.set(P.x, P.y + 2, -40), 3); if (!d.warned) { d.warned = true; G.hud.warn('ELITE CLOSING IN  ·  DODGE!'); sfx.alarm(); } if (Math.random() < 0.5) fx.add.emit(e.pos.x - 1, e.pos.y + 1, e.pos.z + 2, 0, 0, 0, 0.1, rand(3, 6), 0.5, 3, 0.4, 1, 1, 0.1, 0.4, 1, 0, 0, 0, 0, 1); }
+      if (d.t < 0.9) {
+        goto(tmp.set(P.x, P.y + 2, -40), 3);
+        if (!d.warned) { d.warned = true; G.hud.warn('w_eliteClose'); sfx.alarm(); fx.ring(e.pos, 1, 18, 0.4, 3, 0.4, 1); }
+        // anticipation: eye flares, blade ignites early and grows, body coils
+        const k = clamp((d.t - 0.35) / 0.5, 0, 1); m.blade.visible = k > 0; m.blade.scale.z = 0.3 + k * 0.7; m.glowMat.color.setRGB(3 + k * 6 * (0.6 + 0.4 * Math.sin(G.time * 40)), 0.25, 0.7 + k);
+        m.body.rotation.y = damp(m.body.rotation.y, 0.7, 6, dt);
+        if (Math.random() < 0.5) fx.add.emit(e.pos.x - 1, e.pos.y + 1, e.pos.z + 2, 0, 0, 0, 0.1, rand(3, 6), 0.5, 3, 0.4, 1, 1, 0.1, 0.4, 1, 0, 0, 0, 0, 1);
+      }
       else if (d.t < 1.25) { const u = (d.t - 0.9) / 0.35; tmp.set(P.x, P.y + 1, P.z - 5); e.pos.lerp(tmp, u * 0.6 + 0.2); G.threat = Math.min(G.threat, 1.25 - d.t);
+        this.ghostT -= dt; if (this.ghostT <= 0) { this.ghostT = 0.04; this.ravenGhost(e, 0.5); }
         if (Math.random() < 0.8) fx.add.emit(e.pos.x, e.pos.y, e.pos.z, 0, 0, 80, 0.2, 1.2, 0.2, 3, 0.4, 1, 1, 0.1, 0.3, 1, 0, 0, 0.04, 0, 1); }
       else if (!d.slashed) {
-        d.slashed = true; m.blade.visible = true; m.blade.scale.z = 1; sfx.melee();
+        d.slashed = true; m.blade.visible = true; m.blade.scale.z = 1; sfx.melee(); m.body.rotation.y = -0.6; m.glowMat.color.setRGB(3, 0.25, 0.7);
         if (e.pos.distanceTo(P) < 9) { if (G.player.damage(22, e.pos)) fx.sparks(P, 30, 50); }
         fx.ring(tmp.copy(e.pos).lerp(P, 0.5), 2, 14, 0.25, 3, 0.4, 1);
       } else if (d.t > 1.8) { d.state = 'strafe'; d.t = 0; d.slashed = false; d.warned = false; m.blade.visible = false; }
+      else m.body.rotation.y = damp(m.body.rotation.y, 0, 5, dt);
     }
-    if (e.age > 80 && d.state !== 'leave') { d.state = 'leave'; G.hud.small('ELITE WITHDRAWING', 'warn'); }
+    if (e.age > 80 && d.state !== 'leave') { d.state = 'leave'; G.hud.small('m_withdraw', 'warn'); }
     if (d.state === 'leave') { e.pos.y += 60 * dt; e.pos.z -= 120 * dt; if (e.pos.z < -700) this.despawn(e); }
     // pose
     look.position.copy(e.pos); look.lookAt(P); e.mesh.quaternion.slerp(look.quaternion, 1 - Math.exp(-8 * dt));
     m.root.rotation.z = clamp(-(d.tp ? d.tp.x - e.pos.x : 0) * 0.03, -0.6, 0.6);
     m.armR.rotation.x = d.state === 'rifle' ? -1.4 : -0.3; m.armL.rotation.x = d.state === 'melee' ? (d.slashed ? 0.4 : -2.5) : 0.2;
-    for (const f of m.flames) f.scale.z = 1 + Math.random() * 0.5;
+    for (const f of m.flames) f.scale.z = (d.state === 'evade' || d.state === 'enter' ? 2.4 : 1.1) + Math.random() * 0.5;
+    m.legL.rotation.x = damp(m.legL.rotation.x, d.state === 'melee' ? 0.9 : 0.5, 4, dt); m.shinL.rotation.x = damp(m.shinL.rotation.x, d.state === 'melee' ? 1.1 : 0.5, 4, dt);
+    m.legR.rotation.x = damp(m.legR.rotation.x, 0.6, 4, dt); m.shinR.rotation.x = damp(m.shinR.rotation.x, 0.45, 4, dt);
+    this.rRibs.forEach((r, i) => { if (r && r.alive) { m.flames[i].getWorldPosition(tmp); r.push(tmp.x, tmp.y, tmp.z); } });
     if (Math.random() < 0.6) { m.flames[0].getWorldPosition(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 0, 40, 0.25, 1, 0.1, 3, 0.5, 1.2, 1, 0.1, 0.3, 0.8, 2, 0, 0.02, 1, 0); }
   }
-  despawn(e: Enemy) { e.alive = false; e.mesh.visible = false; }
+  despawn(e: Enemy) { e.alive = false; e.mesh.visible = false; if (e.kind === 'elite') { for (const r of this.rRibs) if (r) r.fading = true; this.rRibs = []; } }
 
   update(dt: number) {
     const P = G.player.pos, pl = G.player;
@@ -243,6 +291,7 @@ export class Enemies {
         if (e.pos.distanceTo(P) < e.radius + 1.4 && pl.alive) { if (pl.damage(12, e.pos)) this.kill(e, 'ram'); }
       }
     }
+    for (const g of this.rGhosts) if (g.t > 0) { g.t -= dt; g.mat.opacity = Math.max(0, g.t / 0.35) * 0.45; g.g.position.z += G.speed * 0.1 * dt; if (g.t <= 0) g.g.visible = false; }
     // orbs
     let n = 0, nb = 0;
     for (const o of this.orbs) {

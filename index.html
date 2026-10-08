@@ -11,7 +11,9 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#04060c; } }
 :root[data-theme="dark"] { --bg:#04060c; }
 * { box-sizing:border-box; }
-html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:#dff; font-family:'Rajdhani',system-ui,sans-serif; user-select:none; }
+html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:#dff; font-family:'Rajdhani','PingFang TC','Hiragino Sans','Microsoft JhengHei','Noto Sans CJK TC',system-ui,sans-serif; user-select:none; }
+:root:lang(zh-Hant) .sub, :root:lang(ja) .sub { letter-spacing:.25em; }
+:root:lang(zh-Hant) #big, :root:lang(ja) #big, :root:lang(zh-Hant) #warn, :root:lang(ja) #warn { letter-spacing:.08em; }
 canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:none; }
 #hud { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity .4s; }
 #hud.on { opacity:1; }
@@ -28,6 +30,8 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 #hpP .bar i { background:linear-gradient(90deg, #39ffb0, #e8fff4); box-shadow:0 0 12px #39ffb0; }
 #hpP.low .bar i { background:linear-gradient(90deg, var(--rd), #ffb0b0); box-shadow:0 0 14px var(--rd); }
 #enP .bar i.lock { background:linear-gradient(90deg, var(--rd), var(--or)); }
+#enP.oh .bar { border-color:var(--rd); animation:blink .3s steps(2) infinite; } #enP.lowE .bar i { background:linear-gradient(90deg, var(--or), #ffe0a0); box-shadow:0 0 12px var(--or); }
+#overheat { display:none; font-family:'Orbitron'; font-weight:900; font-size:12px; letter-spacing:.2em; color:#fff; background:var(--rd); padding:1px 8px; margin-top:4px; box-shadow:0 0 14px var(--rd); }
 #spd { font-family:'Orbitron'; font-size:12px; letter-spacing:.15em; color:var(--cy2); margin-top:8px; }
 #spd b { font-size:26px; color:#fff; text-shadow:0 0 10px var(--cy); }
 #wpnP { right:22px; bottom:22px; width:270px; text-align:right; }
@@ -36,6 +40,7 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 #mslState.ready { color:var(--cy); text-shadow:0 0 8px var(--cy); }
 #mslState.rl { color:var(--or); }
 #lockN { font-size:28px; font-weight:900; color:#fff; text-shadow:0 0 10px var(--mg); }
+#lockN.full { color:#ffe070; text-shadow:0 0 14px #ffb020; }
 #objP { left:50%; top:16px; transform:translateX(-50%); text-align:center; min-width:380px; padding:8px 26px; }
 #sector { font-family:'Orbitron'; font-size:10px; letter-spacing:.35em; color:var(--or); }
 #objective { font-size:18px; font-weight:600; letter-spacing:.05em; margin-top:2px; }
@@ -57,7 +62,15 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 #reticle .spin { transform-origin:40px 40px; animation:spin 4s linear infinite; }
 #reticle.hot svg { filter:drop-shadow(0 0 6px var(--rd)); } #reticle.hot .c { stroke:#ff5070; }
 @keyframes spin { to { transform:rotate(360deg); } }
-#lockRing { position:absolute; border:1px dashed rgba(255,58,168,.55); border-radius:50%; display:none; box-shadow:0 0 30px rgba(255,58,168,.15) inset; }
+#lockRing { position:absolute; border:2px dashed rgba(255,58,168,.7); border-radius:50%; display:none; box-shadow:0 0 30px rgba(255,58,168,.2) inset, 0 0 12px rgba(255,58,168,.25); }
+#lockRing.pulse { animation:lp .22s ease-out; } #lockRing.full { border:2px solid #ffd040; box-shadow:0 0 40px rgba(255,200,40,.35) inset, 0 0 22px rgba(255,200,40,.5); }
+@keyframes lp { from { transform:scale(.92); border-color:#fff; } to { transform:none; } }
+#reticle.lockmode svg { filter:drop-shadow(0 0 6px var(--mg)); } #reticle.lockmode .c { stroke:#ff7ac8; }
+.lockM.full::before, .lockM.full::after { border-color:#ffd040; filter:drop-shadow(0 0 6px #ffb020); }
+.wpM { position:absolute; left:0; top:0; width:70px; height:0; margin-left:-35px; display:none; }
+.wpM i { position:absolute; left:0; right:0; top:-34px; height:4px; background:linear-gradient(90deg,#ffb030,#fff0c0); box-shadow:0 0 8px #ffa030; transform-origin:left; }
+.wpM::before { content:''; position:absolute; left:0; right:0; top:-35px; height:6px; border:1px solid rgba(255,180,60,.6); }
+.wpM span { position:absolute; left:50%; top:-52px; transform:translateX(-50%); white-space:nowrap; font-family:'Orbitron'; font-size:9px; font-weight:700; letter-spacing:.18em; color:#ffe0b0; text-shadow:0 0 6px #ff8020; }
 .lockM { position:absolute; left:0; top:0; width:44px; height:44px; margin:-22px 0 0 -22px; display:none; }
 .lockM::before, .lockM::after { content:''; position:absolute; inset:0; border:2px solid var(--mg); clip-path:polygon(0 0,30% 0,30% 8%,8% 8%,8% 30%,0 30%, 0 70%,8% 70%,8% 92%,30% 92%,30% 100%,0 100%, 100% 100%,70% 100%,70% 92%,92% 92%,92% 70%,100% 70%, 100% 30%,92% 30%,92% 8%,70% 8%,70% 0,100% 0); filter:drop-shadow(0 0 4px var(--mg)); }
 .lockM span { position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:3px; font-family:'Orbitron'; font-size:9px; font-weight:700; letter-spacing:.2em; color:#fff; text-shadow:0 0 6px var(--mg); white-space:nowrap; }
@@ -76,6 +89,7 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 #warn { position:absolute; left:0; right:0; top:36%; height:54px; display:none; align-items:center; justify-content:center; font-family:'Orbitron'; font-weight:900; font-size:clamp(14px,2.2vw,24px); letter-spacing:.3em; color:#fff; text-shadow:0 0 12px var(--rd);
   background:repeating-linear-gradient(-45deg, rgba(255,40,60,.22) 0 18px, rgba(0,0,0,.2) 18px 36px); border-top:2px solid rgba(255,60,80,.8); border-bottom:2px solid rgba(255,60,80,.8); animation:blink .5s steps(2) infinite; }
 @keyframes blink { 50% { opacity:.55; } }
+.lockM { transition:none; }
 #prompt { position:absolute; left:50%; bottom:120px; transform:translateX(-50%); font-size:18px; font-weight:600; letter-spacing:.08em; padding:10px 20px; display:none; text-align:center; }
 #prompt b, .key { display:inline-block; min-width:26px; padding:2px 8px; margin:0 3px; border:1px solid var(--cy); color:#fff; font-family:'Orbitron'; font-size:13px; background:rgba(56,232,255,.12); box-shadow:0 0 8px rgba(56,232,255,.4); }
 #vign { position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 50%, rgba(255,0,30,.55) 100%); opacity:0; }
@@ -86,6 +100,7 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 .title em { font-style:normal; color:var(--cy); }
 .sub { font-size:clamp(16px, 2.2vw, 26px); letter-spacing:.6em; color:#ffd0f0; margin-top:10px; text-shadow:0 0 12px var(--mg); }
 .btn { pointer-events:auto; margin-top:34px; padding:14px 46px; font-family:'Orbitron'; font-weight:700; letter-spacing:.3em; font-size:16px; color:#fff; background:linear-gradient(90deg, rgba(56,232,255,.25), rgba(255,58,168,.25)); border:1px solid var(--cy); cursor:pointer; clip-path:polygon(12px 0,100% 0,calc(100% - 12px) 100%,0 100%); animation:pulse 1.6s ease-in-out infinite; }
+.btn.focus { outline:2px solid #fff; outline-offset:4px; box-shadow:0 0 30px rgba(56,232,255,.7); }
 .btn.alt { animation:none; border-color:rgba(255,255,255,.4); background:rgba(255,255,255,.06); margin-top:12px; font-size:13px; }
 @keyframes pulse { 50% { box-shadow:0 0 30px rgba(56,232,255,.6); } }
 .controls { margin-top:30px; display:grid; grid-template-columns:auto auto; gap:6px 18px; font-size:16px; text-align:left; color:#cfe; }
@@ -95,6 +110,9 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 .hint { margin-top:18px; font-size:14px; opacity:.6; letter-spacing:.1em; }
 #fade { position:fixed; inset:0; pointer-events:none; background:#000; opacity:0; transition:opacity .6s; z-index:9; }
 @media (max-width: 1100px), (max-height: 650px) { #hud .panel, #feed, #tag { zoom:.72; } #prompt { zoom:.8; } #big { top:26%; } }
+.langs { margin-top:22px; display:flex; gap:8px; pointer-events:auto; } .langBtn { padding:5px 12px; font-family:'Orbitron'; font-size:12px; letter-spacing:.12em; border:1px solid rgba(255,255,255,.3); cursor:pointer; color:#cfe; } .langBtn.on { border-color:var(--cy); color:#fff; background:rgba(56,232,255,.18); } .langBtn.focus { outline:2px solid #fff; }
+.padhint { margin-top:10px; font-size:13px; opacity:.7; letter-spacing:.1em; } .padhint b { border:1px solid var(--cy); padding:0 6px; margin:0 3px; font-family:'Orbitron'; font-size:11px; }
+#showcase { margin-top:16px; display:none; flex-wrap:wrap; gap:6px; justify-content:center; max-width:760px; } #showcase.on { display:flex; } #showcase .btn { margin-top:0; padding:8px 14px; font-size:11px; animation:none; }
 #fps { position:fixed; left:6px; top:4px; font:11px monospace; color:#6aa; z-index:20; display:none; }
 </style>
 </head>
@@ -102,23 +120,23 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 <canvas id="game"></canvas>
 <div id="hud">
   <div class="scan"></div>
-  <div id="objP" class="panel hide-cine"><div id="sector">SECTOR 01 // MEGACITY</div><div id="objective">Stand by</div></div>
-  <div id="bossP" class="panel"><div class="lbl">STRATEGIC AERIAL DREADNOUGHT</div><div id="bossName">HELIOS</div><div class="bar"><i class="ghost" id="bossGhost"></i><i id="bossHp"></i><div class="notch"></div></div></div>
-  <div id="scoreP" class="panel hide-cine"><div class="lbl">SCORE</div><div id="score">0</div><div id="combo"><span id="comboN">0</span><small>CHAIN</small></div></div>
+  <div id="objP" class="panel hide-cine"><div id="sector" data-i18n="sec1"></div><div id="objective" data-i18n="standby"></div></div>
+  <div id="bossP" class="panel"><div class="lbl" data-i18n="bossSub"></div><div id="bossName">HELIOS</div><div class="bar"><i class="ghost" id="bossGhost"></i><i id="bossHp"></i><div class="notch"></div></div></div>
+  <div id="scoreP" class="panel hide-cine"><div class="lbl" data-i18n="score"></div><div id="score">0</div><div id="combo"><span id="comboN">0</span><small data-i18n="chain"></small></div></div>
   <div id="feed" class="hide-cine"></div>
   <div id="hpP" class="panel hide-cine">
-    <div class="lbl">ARMOR INTEGRITY</div><div class="val"><span id="hpV">100</span>%</div><div class="bar seg"><i id="hpB"></i></div>
-    <div id="enP" style="margin-top:8px"><div class="lbl">BOOST ENERGY</div><div class="bar seg"><i id="enB"></i></div></div>
-    <div id="spd">SPD <b id="spdV">0</b> KM/H</div>
+    <div class="lbl" data-i18n="armor"></div><div class="val"><span id="hpV">100</span>%</div><div class="bar seg"><i id="hpB"></i></div>
+    <div id="enP" style="margin-top:8px"><div class="lbl" data-i18n="energy"></div><div class="bar seg"><i id="enB"></i></div><div id="overheat" data-i18n="m_overheat"></div></div>
+    <div id="spd"><span data-i18n="spd"></span> <b id="spdV">0</b> <span data-i18n="kmh"></span></div>
   </div>
-  <div id="tag">◆ OVERDRIVE · DMG x2</div>
+  <div id="tag" data-i18n="odTag"></div>
   <div id="wpnP" class="panel hide-cine">
-    <div class="lbl">ARMAMENT</div>
-    <div class="row"><span>PULSE RIFLE</span><b>∞</b></div>
-    <div class="row"><span>MICRO MISSILE</span><b id="mslState" class="ready">READY</b></div>
+    <div class="lbl" data-i18n="armament"></div>
+    <div class="row"><span data-i18n="rifle"></span><b data-key="fire"></b></div>
+    <div class="row"><span data-i18n="missile"></span><b id="mslState" class="ready"></b></div>
     <div class="bar"><i id="mslB"></i></div>
-    <div class="row"><span>MULTI-LOCK</span><span id="lockN">0</span></div>
-    <div class="row"><span>ENERGY BLADE</span><b>F</b></div>
+    <div class="row"><span><span data-i18n="multilock"></span> <b data-key="lock"></b></span><span id="lockN">0</span></div>
+    <div class="row"><span data-i18n="blade"></span><b data-key="melee"></b></div>
   </div>
   <div id="lockRing"></div>
   <div id="locks"></div>
@@ -135,30 +153,40 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 <div id="title" class="screen on">
   <div class="title">MACH <em>OVER</em>DRIVE</div>
   <div class="sub">高速機甲：超限驅動</div>
-  <div class="btn" id="startBtn">LAUNCH</div>
+  <div class="btn" id="startBtn" data-i18n="launch"></div>
+  <div id="showcase"></div>
   <div class="controls">
-    <div><span class="key">W A S D</span></div><div>Fly</div>
-    <div><span class="key">MOUSE</span></div><div>Aim</div>
-    <div><span class="key">LMB</span></div><div>Pulse rifle (hold)</div>
-    <div><span class="key">RMB</span> / <span class="key">E</span></div><div>Hold to multi-lock, release to fire missiles</div>
-    <div><span class="key">F</span></div><div>Energy blade lunge (tap again to combo)</div>
-    <div><span class="key">SHIFT</span></div><div>Boost</div>
-    <div><span class="key">SPACE</span></div><div>Dodge · dodge at the last moment for PERFECT DODGE</div>
+    <div><span class="key" data-key="move"></span></div><div data-i18n="c_fly"></div>
+    <div><span class="key" data-key="aim"></span></div><div data-i18n="c_aim"></div>
+    <div><span class="key" data-key="fire"></span></div><div data-i18n="c_fire"></div>
+    <div><span class="key" data-key="lock"></span></div><div data-i18n="c_lock"></div>
+    <div><span class="key" data-key="melee"></span></div><div data-i18n="c_blade"></div>
+    <div><span class="key" data-key="boost"></span></div><div data-i18n="c_boost"></div>
+    <div><span class="key" data-key="dodge"></span></div><div data-i18n="c_dodge"></div>
+    <div><span class="key" data-key="pause"></span></div><div data-i18n="c_pause"></div>
   </div>
-  <div class="hint">Best with headphones · Chrome / Edge / Safari desktop</div>
+  <div class="langs"></div>
+  <div class="hint" data-i18n="hint"></div>
+</div>
+<div id="pause" class="screen">
+  <div class="title" style="font-size:clamp(34px,6vw,72px)" data-i18n="paused"></div>
+  <div class="btn" id="resumeBtn" data-i18n="resume"></div>
+  <div class="btn alt" id="pRetryBtn" data-i18n="retry"></div>
+  <div class="btn alt" id="quitBtn" data-i18n="quit"></div>
+  <div class="langs"></div>
 </div>
 <div id="over" class="screen">
-  <div class="title" style="color:#ffd0d0;text-shadow:0 0 30px #ff3a3a">MECH LOST</div>
-  <div class="sub">GAME OVER</div>
-  <div class="btn" id="retryBtn">RETRY CHECKPOINT</div>
-  <div class="btn alt" id="restartBtn">RESTART MISSION</div>
+  <div class="title" style="color:#ffd0d0;text-shadow:0 0 30px #ff3a3a" data-i18n="mechLost"></div>
+  <div class="sub" data-i18n="gameOver"></div>
+  <div class="btn" id="retryBtn" data-i18n="retry"></div>
+  <div class="btn alt" id="restartBtn" data-i18n="restart"></div>
 </div>
 <div id="win" class="screen">
-  <div class="title">MISSION <em>COMPLETE</em></div>
-  <div class="sub">HELIOS DESTROYED</div>
+  <div class="title" data-i18n="missionComplete"></div>
+  <div class="sub" data-i18n="heliosDestroyed"></div>
   <div class="rank" id="rank">S</div>
   <div class="stats" id="stats"></div>
-  <div class="btn" id="againBtn">FLY AGAIN</div>
+  <div class="btn" id="againBtn" data-i18n="again"></div>
 </div>
 <script type="module" src="./src/main.ts"></script>
 </body>

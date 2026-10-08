@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { G, rand, clamp, damp, lerp, easeInOut, easeOut, slowmo, hitstop, shake, flash, Target } from './core';
 import { part, B, C, S, T, glow, additive, mats } from './models';
 import { fx } from './fx';
-import { sfx, setMusic, stopMusic } from './audio';
+import { sfx, setMusic, stopMusic, duck } from './audio';
+import { mapHelios } from './assets';
 
 const SC = 1.9;
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tmp3 = new THREE.Vector3();
@@ -19,16 +20,41 @@ class BossPart implements Target {
 }
 interface Mod { g: THREE.Group; sp: THREE.Vector3; sr: THREE.Euler; mp: THREE.Vector3; mr: THREE.Euler; t0: number; t1: number }
 
+/** Jagged energy arcs crawling over the hull during transformation / critical state. */
+class Arcs {
+  N = 12; S = 8; geo = new THREE.BufferGeometry(); line: THREE.LineSegments; pos: Float32Array; t = 0; on = false;
+  constructor(scene: THREE.Scene) {
+    this.pos = new Float32Array(this.N * this.S * 6); this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    const m = new THREE.LineBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }); m.color.setRGB(3, 1.6, 4.5);
+    this.line = new THREE.LineSegments(this.geo, m); this.line.frustumCulled = false; this.line.visible = false; scene.add(this.line);
+  }
+  update(dt: number, pts: THREE.Vector3[], spread: number) {
+    this.line.visible = this.on; if (!this.on) return; this.t -= dt; if (this.t > 0) return; this.t = 0.05;
+    const P = this.pos; let o = 0; const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), p = new THREE.Vector3();
+    for (let i = 0; i < this.N; i++) {
+      a.copy(pts[Math.floor(Math.random() * pts.length)]).add(c.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(spread));
+      b.copy(pts[Math.floor(Math.random() * pts.length)]).add(c.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(spread));
+      let px = a.x, py = a.y, pz = a.z;
+      for (let k = 1; k <= this.S; k++) {
+        p.lerpVectors(a, b, k / this.S); if (k < this.S) p.add(c.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(spread * 0.18));
+        P[o++] = px; P[o++] = py; P[o++] = pz; P[o++] = p.x; P[o++] = p.y; P[o++] = p.z; px = p.x; py = p.y; pz = p.z;
+      }
+    }
+    (this.geo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+  }
+}
+
 export class Boss {
   root = new THREE.Group(); mods: Record<string, Mod> = {}; parts: BossPart[] = []; weak: BossPart[] = []; core!: BossPart; armorPts: BossPart[] = [];
   plates: { m: THREE.Mesh; v: THREE.Vector3; w: THREE.Vector3; home: THREE.Vector3 }[] = [];
   hp = 1; maxHp = 8000; state = 'off'; t = 0; atk = ''; atkT = 0; atkIdx = 0; idleT = 0; exposedT = 0; morph = 0; power = 0;
   coreMesh!: THREE.Mesh; blade!: THREE.Group; beam: THREE.Mesh; beamCore: THREE.Mesh; tele: THREE.Mesh; arc: THREE.Mesh; arcMat: THREE.ShaderMaterial;
   beamFrom = new THREE.Vector3(); beamTo = new THREE.Vector3(); beamOn = false; beamR = 4; sweep: any = {}; slashD: any = {}; prevFT = 0; fin: any = {};
-  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D();
+  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D(); arcs: Arcs; arcPts: THREE.Vector3[] = []; mixer: THREE.AnimationMixer | null = null; morphAction: THREE.AnimationAction | null = null;
 
   constructor(scene: THREE.Scene) {
-    this.root.scale.setScalar(SC); this.root.visible = false; scene.add(this.root);
+    this.root.scale.setScalar(SC); this.root.visible = false; scene.add(this.root); this.arcs = new Arcs(scene);
+    for (let i = 0; i < 10; i++) this.arcPts.push(new THREE.Vector3());
     const mod = (name: string, g: THREE.Group, sp: number[], sr: number[], mp: number[], mr: number[], t0: number, t1: number) => {
       this.root.add(g); this.mods[name] = { g, sp: new THREE.Vector3(...sp), sr: new THREE.Euler(...sr), mp: new THREE.Vector3(...mp), mr: new THREE.Euler(...mr), t0, t1 };
     };
@@ -100,7 +126,7 @@ export class Boss {
       const r = new THREE.Mesh(new THREE.TorusGeometry(5.2, 0.8, 6, 20), midMat); a.add(r);
       this.weak.push(p); this.parts.push(p);
     };
-    wp(wings[0], -40, -4, 6.5, 'PORT ARRAY'); wp(wings[1], 40, -4, 6.5, 'STARBOARD ARRAY'); wp(bridge, 0, 9, 4, 'COMMAND SPIRE');
+    wp(wings[0], -40, -4, 6.5, 'wp_port'); wp(wings[1], 40, -4, 6.5, 'wp_star'); wp(bridge, 0, 9, 4, 'wp_spire');
     this.core = new BossPart('core', this.coreMesh, 6 * SC, false, 8); this.core.hp = 1; this.parts.push(this.core);
     // hull spheres
     const hull = (parent: THREE.Object3D, x: number, y: number, z: number, r: number) => { const p = new BossPart('hull', anchor(parent, x, y, z), r * SC, false); this.parts.push(p); };
@@ -125,7 +151,15 @@ export class Boss {
   }
 
   get targets(): Target[] { return this.state === 'off' ? [] : this.parts.concat(this.armorPts); }
+  /** Authored HELIOS: modules ride the procedural transform; an optional 'transform' clip replaces it. */
+  applyHeroModel(src: THREE.Object3D, clips: THREE.AnimationClip[] = []) {
+    const n = mapHelios(this.mods as any, { weak: this.weak.map(w => w.anchor), core: this.coreMesh }, src, this.root);
+    const clip = clips.find(c => /transform/i.test(c.name));
+    if (clip) { this.mixer = new THREE.AnimationMixer(this.root); this.morphAction = this.mixer.clipAction(clip); this.morphAction.play(); this.morphAction.paused = true; }
+    return n;
+  }
   setMorph(t: number) {
+    if (this.morphAction && this.mixer) { this.morphAction.time = clamp(t / 7.5, 0, 1) * this.morphAction.getClip().duration; this.mixer.update(0); return; }
     // t is the transformation clock; each module has its own window
     for (const k in this.mods) {
       const m = this.mods[k]; const u = easeInOut(clamp((t - m.t0) / (m.t1 - m.t0), 0, 1));
@@ -134,10 +168,11 @@ export class Boss {
     }
   }
   camP = new THREE.Vector3(); camL = new THREE.Vector3();
-  cam(p: THREE.Vector3, l: THREE.Vector3, fov: number) { this.camP.copy(p); this.camL.copy(l); G.camRig = { pos: this.camP, look: this.camL, fov }; }
+  cutNext = false;
+  cam(p: THREE.Vector3, l: THREE.Vector3, fov: number) { this.camP.copy(p); this.camL.copy(l); G.camRig = { pos: this.camP, look: this.camL, fov, cut: this.cutNext }; this.cutNext = false; }
   setPower(k: number) { this.power = k; gMat.color.copy(gBase).multiplyScalar(k); }
   reset() {
-    this.state = 'off'; this.root.visible = false; this.beam.visible = false; this.tele.visible = false; this.arc.visible = false; this.beamOn = false;
+    this.state = 'off'; this.root.visible = false; this.arcs.on = false; duck(false); this.beam.visible = false; this.tele.visible = false; this.arc.visible = false; this.beamOn = false;
     this.blade.visible = false; this.blade.scale.x = 0.001;
     for (const p of this.plates) { p.m.visible = true; p.m.position.copy(p.home); p.m.rotation.set(0, 0, 0); }
     for (const p of this.weak) { p.alive = true; p.hp = p.maxHp; p.locks = 0; p.mesh!.visible = true; p.burning = false; }
@@ -148,7 +183,7 @@ export class Boss {
     cMat.color.copy(cBase);
   }
   start(skipIntro = false) {
-    this.reset(); this.root.visible = true; this.state = skipIntro ? 'p1' : 'intro'; this.t = 0; this.atkIdx = 0; this.atk = ''; this.idleT = 2;
+    this.reset(); this.fin = {}; this.root.visible = true; this.state = skipIntro ? 'p1' : 'intro'; this.t = 0; this.atkIdx = 0; this.atk = ''; this.idleT = 2;
     if (!skipIntro) { this.root.position.set(0, 60, -1300); this.setPower(0); this.root.rotation.y = 0.7; }
     else this.root.position.copy(this.basePos);
   }
@@ -182,26 +217,26 @@ export class Boss {
     fx.explosion(p.pos, 5, undefined, { debris: 14 }); for (let i = 0; i < 4; i++) fx.later(0.15 + i * 0.15, () => fx.explosion(tmp.copy(p.pos).add(tmp2.set(rand(-8, 8), rand(-8, 8), rand(-4, 6))), 2.5));
     slowmo(0.35, 0.35); shake(0.8); flash(0.15, 1, 0.7, 0.4);
     const left = this.weak.filter(w => w.alive).length;
-    G.hud.big(`${p.label} DESTROYED`, 'kill'); G.hud.small(`WEAK POINTS ${3 - left}/3`, 'ok'); G.addScore && G.addScore(2500, 'WEAK POINT');
+    G.hud.big('b_weakDown', 'kill', 1.4, { name: '@' + p.label }); G.hud.small('m_weakN', 'ok', { n: 3 - left }); G.addScore && G.addScore(2500, 'k_weak');
     this.hp -= 120;
     if (left === 0 && this.state === 'p1') { this.hp = Math.min(this.hp, this.maxHp * 0.5); this.beginTransform(); }
   }
   // ---------------- state changes ----------------
   beginTransform() {
     if (this.state !== 'p1') return;
-    this.state = 'transform'; this.t = 0; this.beam.visible = this.tele.visible = this.beamOn = false; this.arc.visible = false;
-    G.cinematic = true; G.player.clearLocks(); G.enemies.clear(); G.hud.warn('WARNING  //  HELIOS FORM SHIFT', 6); sfx.bossWarning(); stopMusic(0.5);
-    G.hud.objective('Survive the transformation');
+    this.state = 'transform'; this.t = 0; this.fin = {}; this.beam.visible = this.tele.visible = this.beamOn = false; this.arc.visible = false;
+    G.cinematic = true; G.player.clearLocks(); G.enemies.clear(); G.hud.warn('w_shift', 6); sfx.bossWarning(); stopMusic(0.5);
+    G.hud.objective('o_survive');
   }
   enterP2() {
     this.state = 'p2'; this.t = 0; this.idleT = 1.5; this.atkIdx = 0; this.atk = ''; G.cinematic = false; G.camRig = null;
     this.core.alive = true; this.core.lockable = true; this.coreMesh.visible = true; this.blade.visible = true; this.blade.scale.x = 1;
-    setMusic(3); G.hud.objective('Destroy HELIOS core — PERFECT DODGE its blade');
+    setMusic(3); G.hud.objective('o_core');
   }
   beginFinisherReady() {
     this.state = 'fready'; this.t = 0; this.beam.visible = this.tele.visible = this.beamOn = false; this.arc.visible = false;
     G.enemies.clear(); G.player.clearLocks();
-    G.hud.warn('HELIOS CORE CRITICAL', 3); G.hud.prompt('PRESS <b>F</b> — OVERDRIVE FINISHER', 6); sfx.warning(); slowmo(0.4, 0.8);
+    G.hud.warn('w_critical', 3); G.hud.prompt('p_finisher', 6); sfx.warning(); slowmo(0.4, 0.8); this.arcs.on = true; this.exposedT = 99; G.hud.objective('');
   }
   beginFinisher() {
     this.state = 'finisher'; this.t = 0; this.prevFT = 0; G.cinematic = true; G.player.auto = true; G.player.meleeState = 'none'; G.player.clearLocks(); G.hud.prompt('', 0);
@@ -240,16 +275,29 @@ export class Boss {
     }
     this.coreMesh.rotation.y += dt * 2;
     this.updateParts();
+    if (this.arcs.on) { const ks = Object.keys(this.mods); for (let i = 0; i < this.arcPts.length; i++) this.mods[ks[i % ks.length]].g.getWorldPosition(this.arcPts[i]); this.coreMesh.getWorldPosition(this.arcPts[0]); this.arcs.update(dt, this.arcPts, 22); }
+    else this.arcs.line.visible = false;
     this.updateBeam(dt);
     G.hud.boss(this.state === 'intro' ? 0 : this.hp / this.maxHp, this.state === 'off' ? false : this.state !== 'finisher' || this.t < 3);
   }
   intro(dt: number) {
-    const r = this.root, t = this.t;
-    const u = easeOut(t / 7); r.position.lerpVectors(tmp.set(0, 60, -1300), this.basePos, u); r.rotation.y = lerp(0.7, 0.45, u);
-    this.setPower(clamp((t - 1.2) / 2.5, 0, 1) * (0.8 + 0.2 * Math.sin(t * 30)));
-    const pl = G.player.pos;
-    this.cam(tmp2.set(pl.x * 0.5 + 8 - t * 1.2, pl.y + 2 + t * 0.6, 24 - t), tmp3.copy(r.position).lerp(pl, 0.2), 50 + t * 2);
-    if (t > 7) { this.state = 'p1'; this.t = 0; G.camRig = null; G.cinematic = false; this.idleT = 1; this.setPower(1); G.hud.objective('Destroy the 3 weak points'); setMusic(2); }
+    // 8 s, three shots that sell scale: long lens over the player's shoulder, low angle under the hull, return to play cam
+    const r = this.root, t = this.t, pl = G.player.pos;
+    const u = easeOut(t / 8); r.position.lerpVectors(tmp.set(0, 60, -1300), this.basePos, u); r.rotation.y = lerp(0.7, 0.45, u); r.rotation.z = Math.sin(t * 0.4) * 0.05;
+    this.setPower(t < 5.4 ? 0.15 + 0.1 * Math.sin(t * 9) : clamp((t - 5.4) / 1.8, 0, 1) * (0.85 + 0.15 * Math.sin(t * 30)));
+    if (t < 3.2) {
+      this.cam(tmp2.set(pl.x + 5, pl.y - 2.5, pl.z + 24 - t * 1.5), tmp3.copy(r.position).add(tmp.set(0, 30, 0)), 34);
+      if (!this.fin.introA) { this.fin.introA = true; this.cutNext = true; for (let k = 0; k < 5; k++) G.enemies.spawn('fighter', { from: new THREE.Vector3(rand(-30, 30), rand(-5, 15), 40 + k * 12), tx: rand(-60, 60), ty: rand(10, 40), tz: rand(-260, -180), ph: rand(0, 6), stay: 4, shoot: false }); }
+    } else if (t < 5.6) {
+      if (!this.fin.introB) { this.fin.introB = true; shake(0.6); }
+      this.cam(tmp2.set(pl.x - 5, pl.y - 7, pl.z - 12 - (t - 3.2) * 2), tmp3.copy(r.position).add(tmp.set(0, 40, 0)), 72);
+      if (this.fin.introB === true) { this.fin.introB = 2; this.cutNext = true; }
+      if (Math.random() < dt * 3) shake(0.15);
+    } else {
+      if (!this.fin.introC) { this.fin.introC = true; this.cutNext = true; sfx.explosion(3, 0.5); }
+      const k = (t - 5.6) / 2.4; this.cam(tmp2.set(pl.x * 0.6 + 6 - k * 6, pl.y + 3 + k, pl.z + 16 - k * 4), tmp3.copy(r.position).lerp(pl, 0.25), 55 + k * 10);
+    }
+    if (t > 8) { this.state = 'p1'; this.t = 0; this.fin = {}; G.camRig = null; G.cinematic = false; this.idleT = 1; this.setPower(1); G.hud.objective('o_weak'); setMusic(2); }
   }
   nextAttack(list: string[]) { this.atk = list[this.atkIdx % list.length]; this.atkIdx++; this.atkT = 0; this.sweep = {}; this.slashD = {}; }
   phase1(dt: number) {
@@ -257,12 +305,15 @@ export class Boss {
     else {
       this.atkT += dt; const t = this.atkT;
       if (this.atk === 'missiles') {
-        if (t < 0.05 && !this.sweep.w) { this.sweep.w = true; G.hud.warn('MISSILE BARRAGE', 1.6); sfx.alarm(); }
-        if (Math.floor(t * 10) !== Math.floor((t - dt) * 10) && t < 1.4) {
-          tmp.set(rand(-8, 8), 10, rand(-20, 20)); this.mods.torso.g.localToWorld(tmp);
+        // anticipation (hatches glow) -> warning -> launch -> recovery
+        if (t < 0.05 && !this.sweep.w) { this.sweep.w = true; G.hud.warn('w_hatch', 1.4); sfx.charge(0.8); }
+        if (t < 0.8) { this.setPower(1 + Math.sin(t * 40) * 0.4 + t); for (let k = 0; k < 2; k++) { tmp.set(rand(-8, 8), 10.5, rand(-20, 20)); this.mods.torso.g.localToWorld(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, rand(5, 20), 0, 0.3, 4, 1, 3, 1, 0.3, 2, 0.4, 0.1, 1, 0, 0, 0, 0, 1); } }
+        else if (t < 0.85) { this.setPower(1); G.hud.warn('w_barrage', 1.4); sfx.alarm(); }
+        if (Math.floor(t * 10) !== Math.floor((t - dt) * 10) && t > 0.8 && t < 2.2) {
+          tmp.set(rand(-8, 8), 10, rand(-20, 20)); this.mods.torso.g.localToWorld(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 0, 0, 0.12, 8, 2, 3, 1.5, 0.5, 2, 0.4, 0.1, 1, 0, 0, 0, 0, 1);
           G.enemies.fireMissile(tmp, tmp2.set(rand(-40, 40), rand(50, 80), rand(10, 40)), 1.5); sfx.missile();
         }
-        if (t > 2.2) this.endAttack(2.5);
+        if (t > 3.0) this.endAttack(2.2);
       } else if (this.atk === 'sweep') this.sweepAttack(dt);
       else if (this.atk === 'drones') {
         if (Math.floor(t * 6) !== Math.floor((t - dt) * 6) && t < 1.4) {
@@ -279,7 +330,7 @@ export class Boss {
   sweepAttack(dt: number) {
     const t = this.atkT, s = this.sweep, P = G.player.pos;
     tmp.set(0, 2, 8); this.mods.bridge.g.localToWorld(tmp); this.beamFrom.copy(tmp);
-    if (!s.init) { s.init = true; s.dir = P.x > 0 ? -1 : 1; s.x0 = -s.dir * 75; s.x1 = s.dir * 75; s.y = P.y; G.hud.warn('BEAM SWEEP — DODGE THROUGH IT', 1.6); sfx.charge(1.3); }
+    if (!s.init) { s.init = true; s.dir = P.x > 0 ? -1 : 1; s.x0 = -s.dir * 75; s.x1 = s.dir * 75; s.y = P.y; G.hud.warn('w_sweep', 1.6); sfx.charge(1.3); }
     const TELE = 1.3, DUR = 1.7;
     if (t < TELE) { s.y = damp(s.y, P.y, 3, dt); this.tele.visible = true; this.aimCyl(this.tele, this.beamFrom, tmp2.set(s.x0, s.y, 0), 1 + Math.sin(t * 40) * 0.5); }
     else if (t < TELE + DUR) {
@@ -308,10 +359,14 @@ export class Boss {
     if (proj > 0 && tmp3.distanceTo(P) < this.beamR + 1.2) G.player.damage(28, tmp3);
   }
   transform(dt: number) {
+    // 7.5 s: wide pull-back -> close on the splitting hull -> low hero angle for the roar
     const t = this.t, r = this.root, P = G.player.pos;
-    // camera pull back
-    this.cam(tmp2.set(P.x * 0.3 + 30 - t * 2, P.y + 14 + t, 60 + t * 3), tmp3.copy(r.position).add(tmp.set(0, 20, 0)), 62);
+    if (t < 2.4) this.cam(tmp2.set(P.x * 0.3 + 30 - t * 2, P.y + 14 + t, 60 + t * 3), tmp3.copy(r.position).add(tmp.set(0, 20, 0)), 62);
+    else if (t < 4.8) { this.cam(tmp2.copy(r.position).add(tmp.set(46 - (t - 2.4) * 4, 34, 95)), tmp3.copy(r.position).add(tmp.set(0, 32, 0)), 44); if (!this.fin.cutB) { this.fin.cutB = true; this.cutNext = true; } }
+    else { this.cam(tmp2.copy(r.position).add(tmp.set(-34 + (t - 4.8) * 3, -24, 125 - (t - 4.8) * 8)), tmp3.copy(r.position).add(tmp.set(0, 48, 0)), 60); if (!this.fin.cutC) { this.fin.cutC = true; this.cutNext = true; } }
     r.position.lerp(tmp.set(0, -12, -190), 1 - Math.exp(-1.2 * dt)); r.rotation.y = damp(r.rotation.y, 0, 1.5, dt); r.rotation.z = damp(r.rotation.z, 0, 2, dt);
+    this.arcs.on = t > 0.8 && t < 6.8;
+    this.setPower(t < 4.8 ? 1 + t * 0.08 + Math.sin(t * 25) * 0.15 : 1.4 + Math.sin(t * 50) * 0.2);
     if (t > 0.4 && !this.fin.plates) {
       this.fin.plates = true; sfx.transform();
       for (const w of this.weak) if (w.alive) { w.alive = false; w.mesh!.visible = false; w.burning = true; fx.explosion(w.pos, 3); }
@@ -320,24 +375,22 @@ export class Boss {
     }
     if (this.fin.plates) for (const p of this.plates) if (p.m.visible) { p.m.position.addScaledVector(p.v, dt); p.v.y -= 20 * dt; p.m.rotation.x += p.w.x * dt; p.m.rotation.y += p.w.y * dt; if (t > 3.5) p.m.visible = false; }
     this.setMorph(t);
-    // energy crackle
-    if (t > 1 && t < 5.2) {
-      for (let i = 0; i < 3; i++) { tmp.set(rand(-30, 30), rand(-20, 70), rand(-10, 10)).applyMatrix4(r.matrixWorld.clone().scale(new THREE.Vector3(1 / SC, 1 / SC, 1 / SC))); tmp.copy(r.position).add(tmp2.set(rand(-40, 40), rand(-30, 90), rand(-10, 10)));
+    if (t > 1 && t < 5.6) {
+      for (let i = 0; i < 3; i++) { tmp.copy(r.position).add(tmp2.set(rand(-40, 40), rand(-30, 90), rand(-10, 10)));
         fx.add.emit(tmp.x, tmp.y, tmp.z, rand(-30, 30), rand(-30, 30), rand(-30, 30), 0.25, 0.6, 0.1, 2, 2.6, 4, 0.5, 1, 3, 1, 3, 0, 0.05, 0, 1); }
       if (Math.random() < dt * 3) { tmp.copy(r.position).add(tmp2.set(rand(-30, 30), rand(-20, 70), rand(-5, 15))); fx.explosion(tmp, 1.5, undefined, { sound: false, debris: 3 }); }
-      // converging energy into the core
-      this.coreMesh.getWorldPosition(tmp); for (let i = 0; i < 2; i++) { const a = rand(0, 6.28), d = rand(30, 60); fx.add.emit(tmp.x + Math.cos(a) * d, tmp.y + Math.sin(a) * d, tmp.z, -Math.cos(a) * d * 1.8, -Math.sin(a) * d * 1.8, 0, 0.5, 1.2, 0.2, 0.8, 2, 4, 1, 1, 3, 1, 0, 0, 0.05, 0, 1); }
-      this.coreMesh.scale.setScalar(lerp(0.3, 1.2, clamp((t - 1) / 4, 0, 1)));
+      this.coreMesh.getWorldPosition(tmp); for (let i = 0; i < 3; i++) { const a = rand(0, 6.28), d = rand(30, 60); fx.add.emit(tmp.x + Math.cos(a) * d, tmp.y + Math.sin(a) * d, tmp.z, -Math.cos(a) * d * 1.8, -Math.sin(a) * d * 1.8, 0, 0.5, 1.2, 0.2, 0.8, 2, 4, 1, 1, 3, 1, 0, 0, 0.05, 0, 1); }
+      this.coreMesh.scale.setScalar(lerp(0.3, 1.2, clamp((t - 1) / 4.4, 0, 1)));
       if (Math.floor(t * 2) !== Math.floor((t - dt) * 2)) shake(0.25);
     }
-    if (t > 4.4 && !this.fin.blade) { this.fin.blade = true; this.blade.visible = true; sfx.charge(0.8); }
+    if (t > 4.8 && !this.fin.blade) { this.fin.blade = true; this.blade.visible = true; sfx.charge(0.8); }
     if (this.fin.blade) { this.blade.scale.x = Math.min(1, this.blade.scale.x + dt * 1.5); if (Math.random() < 0.7) { tmp.set(48 + rand(0, 84) * this.blade.scale.x, -4, 0); this.mods.wingR.g.localToWorld(tmp); fx.sparks(tmp, 2, 30, 3, 1, 3); } }
-    if (t > 5.4 && !this.fin.roar) {
+    if (t > 5.8 && !this.fin.roar) {
       this.fin.roar = true; this.coreMesh.getWorldPosition(tmp);
       fx.ring(tmp, 5, 260, 1.2, 3, 1.2, 3.2); fx.ring(tmp, 5, 160, 0.8, 1.2, 2.4, 3.4); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 0, 0, 0.6, 30, 120, 4, 3, 5, 1, 0.3, 1, 1, 0, 0, 0, 0, 1);
-      shake(1); flash(0.3, 1, 0.6, 1); sfx.explosion(4); G.hud.big('HELIOS — FINAL FORM', 'boss'); this.setPower(1.4);
+      shake(1); flash(0.3, 1, 0.6, 1); sfx.explosion(4); G.hud.big('b_final', 'boss'); this.setPower(1.4);
     }
-    if (t > 7) this.enterP2();
+    if (t > 7.5) { this.fin = {}; this.arcs.on = false; this.enterP2(); }
   }
   phase2(dt: number) {
     const r = this.root, P = G.player.pos, t = this.atkT;
@@ -346,9 +399,9 @@ export class Boss {
     const bob = Math.sin(this.t * 1.3) * 3;
     if (!this.atk) {
       this.idleT -= dt;
-      r.position.x = damp(r.position.x, P.x * 0.6, 1.2, dt); r.position.y = damp(r.position.y, -12 + bob, 1.5, dt); r.position.z = damp(r.position.z, -165, 1.5, dt);
+      r.position.x = damp(r.position.x, P.x * 0.7, 1.6, dt); r.position.y = damp(r.position.y, -12 + bob, 1.5, dt); r.position.z = damp(r.position.z, -145, 1.8, dt);
       wingR.rotation.z = damp(wingR.rotation.z, Math.PI / 2 * -1 + 0.25 + Math.sin(this.t) * 0.1, 3, dt); wingL.rotation.z = damp(wingL.rotation.z, Math.PI / 2 - 0.25 - Math.sin(this.t) * 0.1, 3, dt);
-      if (this.idleT <= 0) this.nextAttack(['slash', 'beam', 'dash', 'missiles', 'slash', 'dash', 'beam', 'slash']);
+      if (this.idleT <= 0) this.nextAttack(['slash', 'dash', 'slash', 'beam', 'dash', 'slash', 'missiles', 'dash', 'slash']);
       if (Math.random() < dt * 1.0 && G.player.alive) { this.coreMesh.getWorldPosition(tmp); G.enemies.fireOrb(tmp, P, 80, 8, true, 0.05); }
     } else this.atkT += dt;
     // face player
@@ -358,7 +411,7 @@ export class Boss {
     cMat.color.copy(cBase).multiplyScalar(this.exposedT > 0 ? 2 : 1);
     if (this.atk === 'slash') {
       const d = this.slashD;
-      if (!d.init) { d.init = true; G.hud.warn('!! BLADE INCOMING — DODGE AT THE LAST MOMENT !!', 2); sfx.alarm(); d.a0 = 1.1; d.a1 = -2.5; }
+      if (!d.init) { d.init = true; G.hud.warn('w_bladeIn', 2); sfx.alarm(); d.a0 = 1.1; d.a1 = -2.5; }
       if (t < 1.1) { // dash in + raise
         r.position.x = damp(r.position.x, P.x * 0.9, 4, dt); r.position.y = damp(r.position.y, P.y - 50, 3, dt); r.position.z = damp(r.position.z, -55, 3, dt);
         wingR.rotation.z = damp(wingR.rotation.z, d.a0, 5, dt); wingR.rotation.x = damp(wingR.rotation.x, -0.7, 4, dt);
@@ -374,10 +427,10 @@ export class Boss {
         if (phi <= prev + 0.05 && phi >= cur - 0.05 && rho > 14 && rho < 110 && !d.hit) { d.hit = true; if (G.player.damage(32, P)) fx.sparks(P, 40, 60, 3, 0.5, 2); }
         if (phi < prev) G.threat = Math.min(G.threat, Math.max(0, (cur - phi) / ((d.a0 - d.a1) / 0.32)));
       } else if (t < 2.4) { this.arcMat.uniforms.uAlpha.value = Math.max(0, 1.4 - (t - 1.42) * 3); r.position.z = damp(r.position.z, -150, 2, dt); wingR.rotation.x = damp(wingR.rotation.x, 0, 3, dt); }
-      else { this.arc.visible = false; this.endAttack(1.8); }
+      else { this.arc.visible = false; this.endAttack(1.2); }
     } else if (this.atk === 'beam') {
       const s = this.sweep; this.coreMesh.getWorldPosition(this.beamFrom);
-      if (!s.init) { s.init = true; s.aim = P.clone(); G.hud.warn('CORE CANNON CHARGING', 1.8); sfx.charge(1.6); }
+      if (!s.init) { s.init = true; s.aim = P.clone(); G.hud.warn('w_cannon', 1.8); sfx.charge(1.6); }
       r.position.z = damp(r.position.z, -170, 2, dt);
       if (t < 1.7) { s.aim.lerp(P, 1 - Math.exp(-6 * dt)); const a = rand(0, 6.28), dd = rand(20, 45); fx.add.emit(this.beamFrom.x + Math.cos(a) * dd, this.beamFrom.y + Math.sin(a) * dd, this.beamFrom.z + 5, -Math.cos(a) * dd * 2.5, -Math.sin(a) * dd * 2.5, 0, 0.4, 1.5, 0.3, 1, 2.5, 4, 2, 2, 4, 1, 0, 0, 0.05, 0, 1);
         this.tele.visible = t > 0.6; this.aimCyl(this.tele, this.beamFrom, s.aim, 1.5);
@@ -386,7 +439,7 @@ export class Boss {
         const step = 22 * dt; tmp.copy(P).sub(s.aim); if (tmp.length() > step) tmp.setLength(step); s.aim.add(tmp);
         this.beamTo.copy(s.aim); this.beamOn = true; this.beamR = 5.5;
         const dd = P.distanceTo(s.aim); if (dd < 12) G.threat = Math.min(G.threat, Math.max(0, (dd - 6.5) / 22)); }
-      else { this.endAttack(1.6); this.exposedT = 3.5; G.hud.small('CORE EXPOSED — x2 DAMAGE', 'ok'); }
+      else { this.endAttack(1.6); this.exposedT = 3.5; G.hud.small('m_exposed', 'ok'); }
     } else if (this.atk === 'dash') {
       const s = this.sweep;
       if (!s.init) { s.init = true; s.side = r.position.x > 0 ? -1 : 1; s.n = 0; sfx.boost(); }
@@ -394,10 +447,10 @@ export class Boss {
       if (seg !== s.seg) { s.seg = seg; s.side *= -1; if (seg > 0) this.orbRing(); }
       r.position.x = damp(r.position.x, s.side * 75, 5, dt); r.position.z = damp(r.position.z, -130, 3, dt);
       if (Math.random() < 0.8) { tmp.copy(r.position).add(tmp2.set(rand(-20, 20), rand(0, 80), 0)); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 0, 0, 0.3, rand(8, 14), 2, 2.4, 0.3, 1.6, 0.6, 0.05, 0.3, 0.6, 0, 0, 0, 0.3, 0); }
-      if (t > 2.8) this.endAttack(1.6);
+      if (t > 2.8) this.endAttack(1.1);
     } else if (this.atk === 'missiles') {
       if (Math.floor(t * 12) !== Math.floor((t - dt) * 12) && t < 1.4) { const s = Math.random() < 0.5 ? 'noseL' : 'noseR'; tmp.set(0, 0, 20); this.mods[s].g.localToWorld(tmp); G.enemies.fireMissile(tmp, tmp2.set(rand(-50, 50), rand(30, 70), rand(20, 50)), 1.7); sfx.missile(); }
-      if (t < 0.05 && !this.sweep.w) { this.sweep.w = true; G.hud.warn('MISSILE BARRAGE', 1.4); }
+      if (t < 0.05 && !this.sweep.w) { this.sweep.w = true; G.hud.warn('w_barrage', 1.4); }
       if (t > 2) this.endAttack(1.5);
     }
   }
@@ -407,58 +460,64 @@ export class Boss {
     sfx.explosion(1, 0.4);
   }
   finisher(dt: number) {
+    // ~12 s: boost -> lock -> salvo strips armor -> blade charge -> camera shift -> core impact (hitstop, white)
+    // -> pass through -> silence -> three-stage detonation -> debris -> MISSION COMPLETE
     const t = this.t, pt = this.prevFT; this.prevFT = t; const at = (x: number) => pt < x && t >= x;
     const pl = G.player, P = pl.pos, r = this.root; const f = this.fin;
     this.coreMesh.getWorldPosition(tmp3); const core = f.core || (f.core = tmp3.clone());
-    if (at(0) || !f.started) { f.started = true; f.from.copy(P); G.hud.big('OVERDRIVE', 'perfect'); sfx.boost(); slowmo(0.6, 0.5); G.speedOverride = 2.4; }
-    pl.boosting = t < 2.6;
-    if (t < 1.9) {
-      P.x = damp(P.x, 0, 3, dt); P.y = damp(P.y, 6, 3, dt);
-      this.cam(tmp.set(P.x + 6, P.y - 1.5, P.z + 9), core, 88);
+    if (!f.started) { f.started = true; f.from.copy(P); G.hud.big('b_od', 'perfect'); sfx.boost(); slowmo(0.6, 0.5); G.speedOverride = 2.4; }
+    pl.boosting = t < 3.8;
+    if (t < 3.2) { P.x = damp(P.x, 0, 3, dt); P.y = damp(P.y, 6, 3, dt); }
+    if (t < 1.0) this.cam(tmp.set(P.x + 6, P.y - 1.5, P.z + 9), core, 88);
+    if (at(0.4)) { const pts = this.armorPts; for (const a of pts) { a.alive = true; a.locks = 0; } pl.locks = pts.map(t2 => ({ t: t2, age: 0 })); sfx.locked(); G.hud.small('m_fullLock', 'ok'); }
+    if (at(1.0)) { const tg = pl.locks.map((l: any) => l.t); pl.locks = []; pl.fireSalvo(tg.concat(tg)); G.hud.small('m_fullSalvo', 'ok'); this.cutNext = true; }
+    if (t >= 1.0 && t < 2.4) this.cam(tmp.set(P.x - 20, P.y + 5, P.z - 4), tmp2.copy(P).lerp(core, 0.55), 62);
+    if (at(2.4)) { slowmo(0.5, 0.8); sfx.charge(0.8); pl.mech.blade.visible = true; pl.mech.blade.scale.z = 0.2; this.cutNext = true; }
+    if (t >= 2.4 && t < 3.2) {
+      pl.mech.blade.scale.z = Math.min(1.8, pl.mech.blade.scale.z + dt * 2.2); pl.mech.armL.rotation.set(-2.7, 0, 0.9);
+      pl.mech.blade.getWorldPosition(tmp2); for (let i = 0; i < 3; i++) { const a = rand(0, 6.28), d = rand(4, 9); fx.add.emit(tmp2.x + Math.cos(a) * d, tmp2.y + Math.sin(a) * d, tmp2.z, -Math.cos(a) * d * 4, -Math.sin(a) * d * 4, 0, 0.25, 0.6, 0.1, 1, 2.6, 3.4, 1, 2, 3, 1, 0, 0, 0.05, 0, 1); }
+      this.cam(tmp.set(P.x + 3.5, P.y + 1.2, P.z - 6), tmp2.copy(P).add(tmp3.set(0, 0.5, 0)), 48);
     }
-    if (at(0.35)) {
-      const pts = this.armorPts; for (const a of pts) { a.alive = true; a.locks = 0; }
-      pl.locks = pts.map(t2 => ({ t: t2, age: 0 })); sfx.locked();
+    if (at(3.2)) { f.from.copy(P); sfx.melee(); this.cutNext = true; }
+    if (t >= 3.2 && t < 3.8) {
+      const u = easeInOut((t - 3.2) / 0.6); P.lerpVectors(f.from, tmp.copy(core).add(tmp2.set(0, -2, 10)), u);
+      pl.mech.armL.rotation.set(-2.6, 0, 0.6); if (Math.random() < 0.9) pl.ghost(0.5);
+      this.cam(tmp2.copy(core).add(tmp.set(-70, 12, 55)), tmp.copy(P).lerp(core, 0.6), 50);
     }
-    if (at(0.9)) { const tg = pl.locks.map((l: any) => l.t); pl.locks = []; pl.fireSalvo(tg.concat(tg)); G.hud.small('FULL SALVO', 'ok'); }
-    if (at(1.9)) { f.from.copy(P); G.hud.big('', ''); slowmo(0.35, 1.1); sfx.melee(); pl.mech.blade.visible = true; }
-    if (t >= 1.9 && t < 2.6) {
-      const u = easeInOut((t - 1.9) / 0.7); P.lerpVectors(f.from, tmp.copy(core).add(tmp2.set(0, -2, 10)), u);
-      pl.mech.armL.rotation.set(-2.6, 0, 0.6);
-      if (Math.random() < 0.9) pl.ghost(0.5);
-      this.cam(tmp2.set(P.x - 14, P.y + 3, P.z + 6), tmp.copy(P).lerp(core, 0.5), 75);
-    }
-    if (at(2.6)) {
-      hitstop(0.4); flash(1, 1, 1, 1); shake(1.2); sfx.slashHit(); sfx.explosion(3);
+    if (at(3.8)) {
+      hitstop(0.45); flash(1, 1, 1, 1); shake(1.2); sfx.finisher(); sfx.slashHit();
       pl.slash.visible = true; pl.slashT = 0; pl.slash.position.copy(core); pl.slash.scale.setScalar(7); pl.slash.rotation.set(0, 0, 0.5);
       fx.sparks(core, 120, 140, 2, 3, 4); fx.ring(core, 3, 120, 0.7, 1, 2.5, 3.5); fx.ring(core, 3, 70, 0.5, 3, 3, 3);
       for (let i = 0; i < 80; i++) { const a = rand(0, 6.28); fx.add.emit(core.x, core.y, core.z, Math.cos(a) * 200, Math.sin(a) * 200, rand(-30, 30), 0.5, 0.6, 0.1, 3, 3.5, 4, 1, 1.5, 3, 1, 3, 0, 0.06, 0, 1); }
-      pl.mech.armL.rotation.set(0.4, 0, -0.5); this.hp = 0; f.passFrom = P.clone();
-      G.hud.bossKill();
+      pl.mech.armL.rotation.set(0.4, 0, -0.5); this.hp = 0; f.passFrom = P.clone(); G.hud.bossKill();
+      pl.mech.blade.scale.z = 1;
     }
-    if (t > 2.6 && t < 5.1) {
-      const u = easeOut((t - 2.6) / 1.2); P.lerpVectors(f.passFrom, tmp.copy(core).add(tmp2.set(14, 4, -70)), u);
+    if (t > 3.8 && t < 6.4) {
+      const u = easeOut((t - 3.8) / 1.2); P.lerpVectors(f.passFrom, tmp.copy(core).add(tmp2.set(14, 4, -70)), u);
       pl.extraYaw = damp(pl.extraYaw, Math.PI * 0.85, 3, dt);
+      if (at(3.81)) this.cutNext = true;
       this.cam(tmp2.copy(core).add(tmp.set(30, 6, -120)), tmp.copy(P).lerp(core, 0.45), 55);
-      if (Math.random() < dt * 10) { tmp.copy(core).add(tmp2.set(rand(-40, 40), rand(-50, 60), rand(-10, 10))); fx.explosion(tmp, rand(1, 2), undefined, { sound: Math.random() < 0.3, debris: 1 }); }
-      if (Math.random() < 0.8) { const a = rand(0, 6.28); fx.add.emit(core.x, core.y, core.z, Math.cos(a) * 160, Math.sin(a) * 160, rand(-40, 40), 0.3, 3, 1, 4, 3, 4.5, 1, 1.5, 3, 1, 0, 0, 0.1, 0, 1); }
-      this.coreMesh.scale.setScalar(1.3 + Math.sin(G.time * 40) * 0.3 + (t - 2.6) * 0.4); cMat.color.setRGB(4, 4, 5);
-      r.rotation.x = damp(r.rotation.x, 0.4, 0.8, dt); r.position.y -= dt * 4;
+      this.coreMesh.scale.setScalar(1.3 + Math.sin(G.time * 60) * 0.25); cMat.color.setRGB(4, 4, 5);
+      r.rotation.x = damp(r.rotation.x, 0.2, 0.6, dt);
     }
-    if (at(5.1)) {
-      slowmo(0.3, 1.8); shake(1.5); flash(1, 1, 0.95, 0.85); sfx.explosion(5); sfx.explosion(4);
+    // silence: the world holds its breath
+    if (at(5.0)) { duck(true, 0.08); stopMusic(0.1); slowmo(0.45, 1.4); this.arcs.on = true; G.speedOverride = 0.6; }
+    if (at(6.4)) {
+      duck(false, 0.02); this.arcs.on = false; G.speedOverride = 1;
+      slowmo(0.35, 1.6); shake(1.5); flash(1, 1, 0.95, 0.85); sfx.explosion(5); sfx.explosion(4); sfx.finisher();
       fx.add.emit(core.x, core.y, core.z, 0, 0, 0, 1.4, 40, 420, 5, 4, 3, 2, 0.4, 0.1, 1, 0, 0, 0, 0, 1);
       for (let i = 0; i < 5; i++) fx.ring(core, 10, 200 + i * 120, 1 + i * 0.3, 3, 1.6 - i * 0.2, 0.6 + i * 0.3);
-      for (const k in this.mods) { this.mods[k].g.getWorldPosition(tmp); const p = tmp.clone(); fx.later(rand(0, 0.5), () => fx.explosion(p, rand(5, 8), undefined, { debris: 14 })); }
-      for (let i = 0; i < 14; i++) { const p = core.clone().add(tmp.set(rand(-60, 60), rand(-60, 80), rand(-20, 20))); fx.later(0.1 + i * 0.07, () => fx.explosion(p, rand(3, 6), undefined, { debris: 6, sound: i % 3 === 0 })); }
       fx.light(core, 0xffcc88, 3000, 1.5);
     }
-    if (at(5.6)) { r.visible = false; this.coreMesh.visible = false; }
-    if (t > 5.1) {
-      this.cam(tmp2.copy(core).add(tmp.set(30 + (t - 5.1) * 6, 6 + (t - 5.1) * 3, -120 - (t - 5.1) * 4)), tmp.copy(P).lerp(core, 0.5), 55 + (t - 5.1) * 2);
+    if (at(6.9)) { let k = 0; for (const key in this.mods) { this.mods[key].g.getWorldPosition(tmp); const p = tmp.clone(); fx.later(k++ * 0.09, () => { fx.explosion(p, rand(5, 8), undefined, { debris: 14 }); shake(0.5); }); } }
+    if (at(7.6)) {
+      flash(0.9, 1, 0.85, 0.6); shake(1.4); sfx.explosion(5); r.visible = false; this.coreMesh.visible = false;
+      fx.add.emit(core.x, core.y, core.z, 0, 0, 0, 1.0, 60, 520, 5, 3, 1.5, 2, 0.3, 0.05, 1, 0, 0, 0, 0, 1);
+      for (let i = 0; i < 16; i++) { const p = core.clone().add(tmp.set(rand(-70, 70), rand(-60, 90), rand(-25, 25))); fx.later(0.05 + i * 0.06, () => fx.explosion(p, rand(3, 7), undefined, { debris: 8, sound: i % 3 === 0 })); }
     }
-    if (at(6.6)) { G.hud.big('MISSION COMPLETE', 'complete', 4); sfx.victory(); stopMusic(2); }
-    if (t > 10) { this.state = 'dead'; this.root.visible = false; G.speedOverride = 0; G.onBossDead && G.onBossDead(); }
+    if (t > 6.4) this.cam(tmp2.copy(core).add(tmp.set(30 + (t - 6.4) * 6, 6 + (t - 6.4) * 3, -120 - (t - 6.4) * 4)), tmp.copy(P).lerp(core, 0.5), 55 + (t - 6.4) * 2);
+    if (at(8.8)) { G.hud.big('missionComplete', 'complete', 4); sfx.victory(); stopMusic(2); }
+    if (t > 12) { this.state = 'dead'; this.root.visible = false; G.speedOverride = 0; G.onBossDead && G.onBossDead(); }
   }
 }
 export { mats };

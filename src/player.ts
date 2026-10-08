@@ -3,7 +3,9 @@ import { G, rand, clamp, damp, lerp, slowmo, hitstop, shake, flash, toScreen, se
 import { buildMech, Mech, additive } from './models';
 import { fx, Ribbon } from './fx';
 import { sfx } from './audio';
-import { isDown, wasPressed, wasReleased, aimNDC, mouse } from './input';
+import { isDown, wasPressed, aimNDC, mouse, moveAxis, pad } from './input';
+import { device } from './i18n';
+import { mapMech } from './assets';
 
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), up = new THREE.Vector3(0, 0, 1);
 const scr = { x: 0, y: 0, z: 0, on: false };
@@ -63,17 +65,15 @@ export class Player {
   ghostT = 0; slash: THREE.Mesh; slashMat: THREE.ShaderMaterial; slashT = 1;
   aimPoint = new THREE.Vector3(0, 0, -300); aimTarget: Target | null = null; ray = new THREE.Raycaster();
   bounds = { x: 30, y0: -15, y1: 20, r: 0 }; auto = false; extraYaw = 0; lockRadius = 200;
+  lean = 0; podOpen = 0; fireIdle = 9; wingA = [0, 0]; wingV = [0, 0]; prevVx = 0; scene: THREE.Scene;
 
   constructor(scene: THREE.Scene) {
+    this.scene = scene;
     this.mech = buildMech([0.15, 1.3, 2.0]); this.root = this.mech.root; this.pos = this.root.position; scene.add(this.root);
     this.mech.root.traverse(o => this.mechObjs.push(o));
     this.bolts = new Bolts(scene);
     for (let i = 0; i < 48; i++) this.missiles.push({ pos: new THREE.Vector3(), vel: new THREE.Vector3(), target: null, age: 0, alive: false, rib: null, dmg: 0 });
-    for (let i = 0; i < 10; i++) {
-      const mat = additive(0.3, 1.2, 2.4, 0.5); const g = this.root.clone(true); const objs: THREE.Object3D[] = [];
-      g.traverse(o => { objs.push(o); if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = mat; }); g.visible = false; scene.add(g);
-      this.ghosts.push({ g, objs, mat, t: 0 });
-    }
+    this.buildGhosts();
     this.slashMat = new THREE.ShaderMaterial({
       uniforms: { uA: { value: 0 }, uC: { value: new THREE.Color(1.0, 2.6, 3.4) } },
       vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
@@ -87,6 +87,21 @@ export class Player {
     this.slash = new THREE.Mesh(sg, this.slashMat); this.slash.visible = false; this.slash.frustumCulled = false; scene.add(this.slash);
   }
 
+  buildGhosts() {
+    for (const g of this.ghosts) this.scene.remove(g.g); this.ghosts = [];
+    for (let i = 0; i < 8; i++) {
+      const mat = additive(0.3, 1.2, 2.4, 0.5); const g = this.root.clone(true); const objs: THREE.Object3D[] = [];
+      // ghosts keep only each part's main shell (one draw per part) to bound draw calls during dodges / lunges
+      g.traverse(o => { objs.push(o); const ms = o as THREE.Mesh; if (ms.isMesh) { if ((ms.material as THREE.Material).type === 'MeshBasicMaterial') ms.userData.ghostHide = true; ms.material = mat; } if (o.userData.proc) o.children.forEach((c, k) => { if (k > 0) c.userData.ghostHide = true; }); });
+      g.visible = false; this.scene.add(g);
+      this.ghosts.push({ g, objs, mat, t: 0 });
+    }
+  }
+  /** Swap in an authored GLTF; the procedural rig keeps driving animation and gameplay anchors. */
+  applyHeroModel(src: THREE.Object3D) {
+    const n = mapMech(this.mech, src); if (!n) return;
+    this.mechObjs = []; this.root.traverse(o => this.mechObjs.push(o)); this.buildGhosts();
+  }
   reset() {
     this.hp = this.maxHp; this.energy = 100; this.alive = true; this.deadT = 0; this.invuln = 1; this.boosting = false; this.boostLock = false;
     this.pos.set(0, 0, 0); this.vel.set(0, 0, 0); this.dodgeT = 0; this.meleeState = 'none'; this.combo = 0; this.bonusT = 0; this.roll = this.rollTarget = 0;
@@ -97,6 +112,7 @@ export class Player {
     this.mech.blade.visible = false;
   }
   startTrails() { this.ribbons = []; for (let i = 0; i < 2; i++) { const r = fx.ribbon(); if (r) { this.mech.flames[i].getWorldPosition(tmp); r.start(tmp.x, tmp.y, tmp.z, 0.35, 0.3, 1.2, 2.2, 0.8, 1); this.ribbons.push(r); } } }
+  pruneLocks() { for (let i = this.locks.length - 1; i >= 0; i--) { const l = this.locks[i]; if (!l.t.alive) { l.t.locks = Math.max(0, l.t.locks - 1); this.locks.splice(i, 1); } } }
   clearLocks() { for (const l of this.locks) l.t.locks = Math.max(0, l.t.locks - 1); this.locks.length = 0; this.locking = false; }
 
   damage(n: number, from?: THREE.Vector3) {
@@ -117,19 +133,19 @@ export class Player {
   ghost(alpha = 0.55) {
     const gh = this.ghosts.find(g => g.t <= 0) || this.ghosts[0];
     gh.t = 0.45; gh.mat.opacity = alpha; gh.g.visible = true;
-    for (let i = 0; i < this.mechObjs.length; i++) { const a = this.mechObjs[i], b = gh.objs[i]; b.position.copy(a.position); b.quaternion.copy(a.quaternion); b.scale.copy(a.scale); b.visible = a.visible; }
+    for (let i = 0; i < this.mechObjs.length; i++) { const a = this.mechObjs[i], b = gh.objs[i]; b.position.copy(a.position); b.quaternion.copy(a.quaternion); b.scale.copy(a.scale); b.visible = a.visible && !b.userData.ghostHide; }
   }
   perfectDodge() {
     G.stats.perfect++; slowmo(0.18, 0.6); this.bonusT = 4; this.energy = Math.min(100, this.energy + 40); this.heal(4);
     fx.ring(this.pos, 1, 26, 0.6, 0.4, 1.8, 3); fx.ring(this.pos, 1, 14, 0.4, 2, 2, 2);
     for (let i = 0; i < 60; i++) { const a = rand(0, Math.PI * 2); const s = rand(20, 60); fx.add.emit(this.pos.x, this.pos.y, this.pos.z, Math.cos(a) * s, Math.sin(a) * s, rand(-10, 10), rand(0.4, 0.8), 0.4, 0.05, 0.6, 2.4, 3.4, 0.2, 0.6, 2, 1, 2, 0, 0.05, 0.3, 1); }
     for (let i = 0; i < 4; i++) fx.later(i * 0.02, () => this.ghost(0.6));
-    flash(0.25, 0.4, 0.9, 1.2); G.hud.big('PERFECT DODGE', 'perfect'); sfx.perfect(); shake(0.2);
-    G.addScore && G.addScore(500, 'PERFECT DODGE');
+    flash(0.25, 0.4, 0.9, 1.2); G.hud.big('b_perfect', 'perfect'); sfx.perfect(); shake(0.2);
+    G.addScore && G.addScore(500, 'k_perfect');
   }
   nearMiss() {
     if (this.dodgeT > 0) return;
-    G.stats.nearMiss++; this.energy = Math.min(100, this.energy + 8); G.hud.small('NEAR MISS +8', 'near'); sfx.nearMiss(); G.addScore && G.addScore(50);
+    G.stats.nearMiss++; this.energy = Math.min(100, this.energy + 8); G.hud.small('m_near', 'near'); sfx.nearMiss(); G.addScore && G.addScore(50);
   }
   findMeleeTarget(range: number) {
     let best: Target | null = null, bd = 1e9;
@@ -172,13 +188,13 @@ export class Player {
     const ctl = !this.auto && !G.cinematic && G.state === 'playing';
     // ---- input / movement
     let ix = 0, iy = 0;
-    if (ctl) { ix = (isDown('right') ? 1 : 0) - (isDown('left') ? 1 : 0); iy = (isDown('up') ? 1 : 0) - (isDown('down') ? 1 : 0); }
-    if (ix) this.lastIx = ix;
+    if (ctl) { const mv = moveAxis(); ix = mv.x; iy = mv.y; }
+    if (Math.abs(ix) > 0.3) this.lastIx = Math.sign(ix);
     const wantBoost = ctl && isDown('boost') && !this.boostLock;
     if (wantBoost && this.energy > 0) {
-      if (!this.boosting) { sfx.boost(); fx.ring(tmp.copy(this.pos).add(tmp2.set(0, 0, 3)), 1, 12, 0.35, 0.4, 1.6, 3); shake(0.25); this.boostT = 0; G.hud.small('BOOST', 'boost'); }
+      if (!this.boosting) { sfx.boost(); fx.ring(tmp.copy(this.pos).add(tmp2.set(0, 0, 3)), 1, 12, 0.35, 0.4, 1.6, 3); shake(0.25); this.boostT = 0; G.hud.small('m_boost', 'boost'); }
       this.boosting = true; this.boostT += dt; this.energy -= 20 * dt; this.regenDelay = Math.max(this.regenDelay, 0);
-      if (this.energy <= 0) { this.energy = 0; this.boosting = false; this.boostLock = true; G.hud.small('OVERHEAT', 'warn'); }
+      if (this.energy <= 0) { this.energy = 0; this.boosting = false; this.boostLock = true; G.hud.small('m_overheat', 'warn'); }
     } else { this.boosting = false; }
     if (this.boostLock && (!isDown('boost') && this.energy > 20)) this.boostLock = false;
     if (!this.boosting) this.energy = Math.min(100, this.energy + (this.dodgeT > 0 ? 0 : 22) * dt);
@@ -187,7 +203,7 @@ export class Player {
     this.vel.x = damp(this.vel.x, ix * maxS, this.boosting ? 7 : 5.5, dt);
     this.vel.y = damp(this.vel.y, iy * maxS * 0.85, this.boosting ? 7 : 5.5, dt);
     if (ctl && wasPressed('dodge') && this.dodgeCd <= 0 && this.energy >= 10 && this.meleeState === 'none') {
-      this.dodgeDir.set(ix || this.lastIx, iy); if (!ix && iy) this.dodgeDir.x = 0; this.dodgeDir.normalize();
+      this.dodgeDir.set(Math.abs(ix) > 0.2 ? ix : this.lastIx, Math.abs(iy) > 0.2 ? iy : 0); if (Math.abs(ix) <= 0.2 && Math.abs(iy) > 0.2) this.dodgeDir.x = 0; this.dodgeDir.normalize();
       this.dodgeT = 0.3; this.invuln = Math.max(this.invuln, 0.38); this.energy -= 10; this.dodgeCd = 0.42; sfx.dodge();
       this.rollTarget += (this.dodgeDir.x >= 0 ? -1 : 1) * Math.PI * 2;
       this.ghost(0.4);
@@ -232,46 +248,80 @@ export class Player {
     this.aimTarget = null; let bd = 70;
     for (const t of G.targetList as Target[]) { if (!t.alive || t.kind === 'hull' || t.pos.z > this.pos.z - 5) continue; toScreen(t.pos, scr); if (!scr.on) continue; const d = Math.hypot(scr.x - mouse.x, scr.y - mouse.y) - t.radius * 2; if (d < bd) { bd = d; this.aimTarget = t; } }
     if (this.aimTarget) this.aimPoint.copy(this.aimTarget.pos); else this.aimPoint.copy(this.ray.ray.origin).addScaledVector(this.ray.ray.direction, 320);
+    // gamepad soft aim assist: gentle pull toward the nearest visible target near the reticle, plus friction over it
+    pad.friction = 1; this.lockRadius = device === 'pad' ? 250 : 200;
+    if (ctl && device === 'pad') {
+      let best: Target | null = null, bd2 = 140 * G.height / 1080, bx = 0, by = 0;
+      for (const t of G.targetList as Target[]) {
+        if (!t.alive || t.kind === 'hull' || t.pos.z > this.pos.z - 5) continue; toScreen(t.pos, scr); if (!scr.on) continue;
+        const d = Math.hypot(scr.x - mouse.x, scr.y - mouse.y) - (t.lockable ? 10 : 0); if (d < bd2) { bd2 = d; best = t; bx = scr.x; by = scr.y; }
+      }
+      if (best) { const sm = Math.hypot(pad.rx, pad.ry); const k = (1 - Math.exp(-3.2 * (1 - 0.55 * sm) * dt)) * 0.65; mouse.x += (bx - mouse.x) * k; mouse.y += (by - mouse.y) * k; pad.friction = 0.55; }
+    }
     // ---- fire
     this.fireT -= dt;
     if (ctl && isDown('fire') && this.fireT <= 0 && this.meleeState !== 'lunge') {
       this.fireT = 1 / 13; m.gunTip.getWorldPosition(tmp);
       tmp2.copy(this.aimPoint).sub(tmp).normalize();
-      this.bolts.fire(tmp, tmp2, this.bonusT > 0 ? 18 : 9); fx.muzzle(tmp); sfx.laser(); this.recoil = 1;
+      this.bolts.fire(tmp, tmp2, this.bonusT > 0 ? 18 : 9); fx.muzzle(tmp); sfx.laser(); this.recoil = 1; this.fireIdle = 0;
       if (Math.random() < 0.3) fx.light(tmp, 0x66ccff, 30, 0.06);
     }
     // ---- lock-on & missiles
-    if (!this.missileReady) { this.reloadT -= dt; if (this.reloadT <= 0) { this.missileReady = true; G.hud.small('MISSILES READY', 'ok'); } }
-    for (let i = this.locks.length - 1; i >= 0; i--) { const l = this.locks[i]; l.age += dt; if (!l.t.alive) { l.t.locks = Math.max(0, l.t.locks - 1); this.locks.splice(i, 1); } }
+    if (!this.missileReady) { this.reloadT -= dt; if (this.reloadT <= 0) { this.missileReady = true; G.hud.small('m_mslReady', 'ok'); } }
+    for (const l of this.locks) l.age += dt; this.pruneLocks();
     if (ctl && isDown('lock') && this.missileReady) {
       if (!this.locking) { this.locking = true; this.lockT = 0; }
       this.lockT -= dt;
       if (this.lockT <= 0 && this.locks.length < this.maxLocks) {
         const t = this.findLockCandidate();
-        if (t) { t.locks++; this.locks.push({ t, age: 0 }); this.lockT = 0.07; sfx.lockTick(); if (this.locks.length === this.maxLocks) sfx.locked(); }
+        if (t) { t.locks++; this.locks.push({ t, age: 0 }); this.lockT = 0.07; sfx.lockTick(this.locks.length); if (this.locks.length === this.maxLocks) { sfx.locked(); G.hud.small('m_fullLock', 'ok'); } }
       }
     }
     if (this.locking && (!isDown('lock') || !ctl)) { this.locking = false; if (ctl || this.locks.length) this.fireSalvo(); }
     this.updateMissiles(dt);
     this.bolts.update(dt, G.targetList);
-    // ---- animation
-    this.recoil = damp(this.recoil, 0, 18, dt);
+    this.pruneLocks();
+    // ---- animation: procedural, layered on the hierarchy (never just the root)
+    const V = G.vfx || 0.5; this.fireIdle += dt;
+    this.recoil = damp(this.recoil, 0, 18, dt); this.podOpen = Math.max(0, this.podOpen - dt * 2.2);
     this.roll = damp(this.roll, this.rollTarget, 9, dt);
-    const bank = -this.vel.x * 0.016, pitch = this.vel.y * 0.008;
-    const aimYaw = clamp(-(this.aimPoint.x - this.pos.x) / 300, -0.35, 0.35);
-    this.root.rotation.set(pitch + (this.boosting ? -0.25 : -0.08), aimYaw * 0.6 + this.extraYaw, bank + this.roll, 'YXZ');
-    m.armR.rotation.x = lerp(-1.25, -1.45, this.recoil) + clamp((this.aimPoint.y - this.pos.y) / 400, -0.4, 0.4);
-    m.armR.position.z = this.recoil * 0.25;
-    if (this.meleeState === 'slash') { const u = clamp(this.meleeT / 0.15, 0, 1); m.armL.rotation.set(lerp(-2.6, 0.2, easeOut(u)), 0, lerp(0.6, -0.4, u) * (this.combo === 2 ? -1 : 1)); m.body.rotation.y = lerp(0.6, -0.5, u) * (this.combo === 2 ? -1 : 1); }
-    else if (this.meleeState === 'lunge') { m.armL.rotation.set(-2.4, 0, 0.6); m.body.rotation.y = damp(m.body.rotation.y, 0.5, 10, dt); }
-    else { m.armL.rotation.x = damp(m.armL.rotation.x, this.boosting ? 0.5 : 0.25, 6, dt); m.armL.rotation.z = damp(m.armL.rotation.z, 0, 6, dt); m.body.rotation.y = damp(m.body.rotation.y, 0, 6, dt); }
+    const bkick = this.boosting ? Math.max(0, 1 - this.boostT * 4) : 0;
+    const dodging = this.dodgeT > 0, lunging = this.meleeState === 'lunge';
+    this.lean = damp(this.lean, lunging ? -0.6 : this.boosting ? -0.42 : -0.1 - iy * 0.06, 6, dt);
+    const bank = clamp(-this.vel.x * 0.018, -0.75, 0.75), pitch = this.vel.y * 0.007;
+    const aimYaw = clamp(-(this.aimPoint.x - this.pos.x) / 300, -0.35, 0.35), aimPitch = clamp((this.aimPoint.y - this.pos.y) / 400, -0.4, 0.4);
+    this.root.rotation.set(pitch + this.lean - bkick * 0.18, aimYaw * 0.6 + this.extraYaw, bank + this.roll, 'YXZ');
+    m.torso.rotation.x = damp(m.torso.rotation.x, -this.recoil * 0.06 + (this.boosting ? -0.12 : 0), 12, dt);
+    // right arm: rifle up while firing / targeting, trails back in boost when idle
+    const aiming = this.fireIdle < 0.6 || !!this.aimTarget || !this.boosting;
+    const armRx = aiming ? lerp(-1.25, -1.45, this.recoil) + aimPitch : 0.45;
+    m.armR.rotation.x = damp(m.armR.rotation.x, armRx, aiming ? 16 : 5, dt); m.armR.rotation.z = damp(m.armR.rotation.z, aiming ? 0 : -0.15, 6, dt);
+    m.armR.position.z = this.recoil * 0.25; m.shoulderR.rotation.x = -this.recoil * 0.18;
+    // left arm: melee anticipation -> swing -> recovery
+    if (this.meleeState === 'slash') { const u = clamp(this.meleeT / 0.15, 0, 1); const f = this.combo === 2 ? -1 : 1; m.armL.rotation.set(lerp(-2.7, 0.35, easeOut(u)), 0, lerp(0.8, -0.5, u) * f); m.body.rotation.y = lerp(0.7, -0.55, easeOut(u)) * f; }
+    else if (lunging) { const w = clamp(this.meleeT / 0.08, 0, 1); m.armL.rotation.set(lerp(-1.6, -2.7, w), 0, lerp(0.3, 0.9, w)); m.body.rotation.y = damp(m.body.rotation.y, 0.6, 14, dt); }
+    else { m.armL.rotation.x = damp(m.armL.rotation.x, this.boosting ? 0.6 : 0.25, 5, dt); m.armL.rotation.z = damp(m.armL.rotation.z, this.boosting ? 0.15 : 0, 5, dt); m.body.rotation.y = damp(m.body.rotation.y, aimYaw * 0.3, 5, dt); }
     m.blade.scale.z = damp(m.blade.scale.z, m.blade.visible ? 1 : 0.01, 20, dt);
-    const spread = this.boosting ? 0.75 : 0.42;
-    m.wingL.rotation.z = damp(m.wingL.rotation.z, -spread, 6, dt); m.wingR.rotation.z = damp(m.wingR.rotation.z, spread, 6, dt);
-    m.legL.rotation.x = damp(m.legL.rotation.x, this.boosting ? 0.9 : 0.45 + this.vel.y * -0.006, 5, dt); m.legR.rotation.x = damp(m.legR.rotation.x, this.boosting ? 1.0 : 0.55 + this.vel.y * -0.006, 5, dt);
-    m.head.rotation.y = aimYaw;
-    const thr = (this.boosting ? 2.6 : 1.0) * (0.85 + Math.random() * 0.3);
-    for (const f of m.flames) { f.scale.set(this.boosting ? 1.5 : 1, this.boosting ? 1.5 : 1, thr); }
+    // legs: knees tuck on dodge, trail straight in boost, hang with vertical motion
+    const thigh = dodging ? 1.1 : lunging ? 0.75 : this.boosting ? 0.95 : 0.35 - this.vel.y * 0.006;
+    const knee = dodging ? 1.3 : lunging ? 0.9 : this.boosting ? 0.15 : 0.45 + Math.max(0, this.vel.y) * 0.008;
+    m.legL.rotation.x = damp(m.legL.rotation.x, thigh, 7, dt); m.legR.rotation.x = damp(m.legR.rotation.x, thigh + 0.1, 6, dt);
+    m.shinL.rotation.x = damp(m.shinL.rotation.x, knee, 7, dt); m.shinR.rotation.x = damp(m.shinR.rotation.x, knee - 0.08, 6, dt);
+    const lz = clamp(this.vel.x * 0.005, -0.25, 0.25); m.legL.rotation.z = damp(m.legL.rotation.z, lz, 5, dt); m.legR.rotation.z = damp(m.legR.rotation.z, lz, 4, dt);
+    // wing binders: spring with lag behind lateral acceleration
+    const ax = (this.vel.x - this.prevVx) / Math.max(dt, 1e-4); this.prevVx = this.vel.x;
+    const spread = this.boosting ? 0.85 : dodging ? 0.2 : 0.42;
+    [m.wingL, m.wingR].forEach((w, k) => {
+      const sgn = k ? 1 : -1;
+      this.wingV[k] += ((spread - this.wingA[k]) * 70 - this.wingV[k] * 10 - ax * 0.004 * sgn) * dt; this.wingA[k] += this.wingV[k] * dt;
+      w.rotation.z = sgn * this.wingA[k]; w.rotation.y = damp(w.rotation.y, sgn * (this.boosting ? -0.8 : -0.4), 4, dt);
+    });
+    // missile pods hinge open on launch
+    m.podGL.rotation.x = -this.podOpen * 0.75; m.podGR.rotation.x = -this.podOpen * 0.75;
+    m.head.rotation.y = aimYaw * 1.2; m.head.rotation.x = -aimPitch * 0.4;
+    const thr = ((this.boosting ? 2.4 : 1.0 + Math.max(0, iy) * 0.3) * (0.7 + V * 0.5) + bkick * 2.2) * (0.85 + Math.random() * 0.3);
+    for (const f of m.flames) { const w = this.boosting ? 1.5 : 1; f.scale.set(w, w, thr); }
+    for (const f of m.footFlames) f.scale.set(1, 1, (this.boosting ? 1.6 : 0.45 + Math.abs(this.vel.y) * 0.015) * (0.8 + Math.random() * 0.4));
     // engine particles + trails
     for (let i = 0; i < 2; i++) {
       m.flames[i].getWorldPosition(tmp);
@@ -304,18 +354,21 @@ export class Player {
     if (!force) { this.clearLocks(); this.missileReady = false; this.reloadT = this.reloadMax; }
     for (let i = 0; i < n; i++) {
       const t = targets.length ? targets[i % targets.length] : null;
-      fx.later(i * 0.035, () => this.launchMissile(t, i));
+      fx.later(i * 0.055, () => this.launchMissile(t, i));
     }
-    if (n >= 6) G.hud.small(`MISSILE SALVO x${n}`, 'ok');
+    if (n >= 6) G.hud.small('m_salvo', 'ok', { n });
     shake(0.15);
   }
   launchMissile(t: Target | null, i: number) {
     const ms = this.missiles.find(x => !x.alive); if (!ms || !this.alive) return;
     const side = i % 2 ? 1 : -1; (side > 0 ? this.mech.podR : this.mech.podL).getWorldPosition(ms.pos);
-    ms.vel.set(side * rand(15, 55), rand(20, 50), rand(10, 40)); ms.target = t; ms.age = 0; ms.alive = true; ms.dmg = this.bonusT > 0 ? 80 : 42;
+    ms.vel.set(side * rand(28, 62), rand(16, 44), rand(6, 24)); ms.target = t; ms.age = 0; ms.alive = true; ms.dmg = this.bonusT > 0 ? 80 : 42;
     if (t) t.locks++;
-    ms.rib = fx.ribbon(); if (ms.rib) ms.rib.start(ms.pos.x, ms.pos.y, ms.pos.z, 0.28, 1.4, 1.6, 2.0, 0.9, 1);
-    fx.add.emit(ms.pos.x, ms.pos.y, ms.pos.z, 0, 0, 0, 0.1, 1.5, 0.5, 3, 2, 1, 2, 0.5, 0.2, 1, 0, 0, 0, 0, 1);
+    ms.rib = fx.ribbon(); if (ms.rib) ms.rib.start(ms.pos.x, ms.pos.y, ms.pos.z, 0.2, 0.9, 1.7, 2.4, 0.85, 0.35);
+    // launch flare + smoke puff from the pod, pods kick open, tiny camera tick
+    fx.add.emit(ms.pos.x, ms.pos.y, ms.pos.z, 0, 0, 0, 0.09, 2.6, 0.6, 3, 2.6, 2, 2, 0.8, 0.3, 1, 0, 0, 0, 0, 1);
+    for (let k = 0; k < 3; k++) fx.smoke.emit(ms.pos.x, ms.pos.y, ms.pos.z, side * rand(2, 8), rand(-2, 4), rand(10, 25), rand(0.5, 0.9), 0.6, 2.2, 0.5, 0.52, 0.58, 0.2, 0.2, 0.24, 0.4, 3, 0, 0, 0.6, 2);
+    this.podOpen = 1; G.trauma = Math.min(1.2, G.trauma + 0.05);
     sfx.missile();
   }
   updateMissiles(dt: number) {
@@ -323,19 +376,22 @@ export class Player {
       if (!ms.alive) continue; ms.age += dt;
       if (ms.target && !ms.target.alive) { ms.target.locks = Math.max(0, ms.target.locks - 1); ms.target = this.retarget(ms.pos); if (ms.target) ms.target.locks++; }
       if (ms.target) tmp.copy(ms.target.pos).sub(ms.pos).normalize(); else tmp.set(0, 0, -1).add(tmp2.copy(this.aimPoint).sub(ms.pos).normalize()).normalize();
-      const speed = Math.min(420, 70 + ms.age * 520); const turn = Math.min(16, 1.5 + ms.age * 22);
+      const speed = Math.min(400, 60 + ms.age * 480); const turn = Math.min(14, 1.0 + ms.age * 12);
       tmp2.copy(ms.vel).normalize().lerp(tmp, 1 - Math.exp(-turn * dt)).normalize();
       ms.vel.copy(tmp2).multiplyScalar(speed);
       const px = ms.pos.x, py = ms.pos.y, pz = ms.pos.z;
       ms.pos.addScaledVector(ms.vel, dt);
       if (ms.rib) ms.rib.push(ms.pos.x, ms.pos.y, ms.pos.z);
-      fx.smoke.emit(ms.pos.x, ms.pos.y, ms.pos.z, rand(-2, 2), rand(-2, 2), 0, rand(0.6, 1.0), 0.5, rand(2, 3.2), 0.55, 0.55, 0.6, 0.25, 0.25, 0.3, 0.45, 3, -2, 0, 1, 2);
+      if (Math.random() < 0.55) fx.smoke.emit(ms.pos.x, ms.pos.y, ms.pos.z, rand(-1.5, 1.5), rand(-1.5, 1.5), 0, rand(0.45, 0.75), 0.4, rand(1.4, 2.2), 0.55, 0.58, 0.64, 0.25, 0.25, 0.3, 0.32, 3, -2, 0, 0.6, 2);
       fx.add.emit(ms.pos.x, ms.pos.y, ms.pos.z, 0, 0, 0, 0.07, 1.1, 0.3, 3, 2, 1, 3, 0.6, 0.1, 1, 0, 0, 0, 0, 1);
       let boom = ms.age > 4.5;
       if (ms.target && segSphere(px, py, pz, ms.pos.x, ms.pos.y, ms.pos.z, ms.target.pos, ms.target.radius + 1.5)) boom = true;
       if (boom) {
         ms.alive = false; if (ms.rib) ms.rib.fading = true;
-        if (ms.target) { ms.target.locks = Math.max(0, ms.target.locks - 1); if (ms.target.alive) ms.target.hit(ms.dmg, ms.pos, 'missile'); }
+        if (ms.target) {
+          ms.target.locks = Math.max(0, ms.target.locks - 1);
+          if (ms.target.alive) { ms.target.hit(ms.dmg, ms.pos, 'missile'); if (!ms.target.isBoss && ms.target.alive) ms.target.pos.addScaledVector(tmp2.copy(ms.vel).normalize(), 1.6); }
+        }
         for (const o of G.targetList as Target[]) if (o.alive && o !== ms.target && o.lockable && o.pos.distanceTo(ms.pos) < 7 + o.radius) o.hit(ms.dmg * 0.4, ms.pos, 'splash');
         fx.explosion(ms.pos, 0.8, undefined, { debris: 1 });
       }
