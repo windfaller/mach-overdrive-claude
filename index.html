@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mach Overdrive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root { --cy:#38e8ff; --cy2:#9ff6ff; --mg:#ff3aa8; --or:#ffa030; --rd:#ff3a3a; --bg:#04060c; --panel:rgba(8,18,30,.42); --line:rgba(56,232,255,.55); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#04060c; } }
+:root[data-theme="dark"] { --bg:#04060c; }
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; overflow:hidden; background:var(--bg); color:#dff; font-family:'Rajdhani',system-ui,sans-serif; user-select:none; }
+canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:none; }
+#hud { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity .4s; }
+#hud.on { opacity:1; }
+#hud.cine .hide-cine { opacity:0; }
+.hide-cine { transition:opacity .3s; }
+.scan { position:fixed; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg, rgba(120,255,255,.025) 0 1px, transparent 1px 3px); mix-blend-mode:screen; }
+.panel { position:absolute; background:linear-gradient(135deg, var(--panel), rgba(4,10,20,.15)); border:1px solid rgba(56,232,255,.25); clip-path:polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px)); padding:10px 14px; backdrop-filter: blur(2px); }
+.lbl { font-family:'Orbitron'; font-size:10px; letter-spacing:.25em; color:var(--cy2); opacity:.85; }
+.val { font-family:'Orbitron'; font-weight:700; font-size:20px; color:#fff; text-shadow:0 0 8px var(--cy); }
+.bar { position:relative; height:9px; margin-top:5px; background:rgba(56,232,255,.08); border:1px solid rgba(56,232,255,.3); overflow:hidden; }
+.bar i { position:absolute; inset:0; transform-origin:left; background:linear-gradient(90deg, var(--cy), #e8ffff); box-shadow:0 0 12px var(--cy); }
+.bar.seg::after { content:''; position:absolute; inset:0; background:repeating-linear-gradient(90deg, transparent 0 9px, rgba(0,0,0,.7) 9px 11px); }
+#hpP { left:22px; bottom:22px; width:300px; }
+#hpP .bar i { background:linear-gradient(90deg, #39ffb0, #e8fff4); box-shadow:0 0 12px #39ffb0; }
+#hpP.low .bar i { background:linear-gradient(90deg, var(--rd), #ffb0b0); box-shadow:0 0 14px var(--rd); }
+#enP .bar i.lock { background:linear-gradient(90deg, var(--rd), var(--or)); }
+#spd { font-family:'Orbitron'; font-size:12px; letter-spacing:.15em; color:var(--cy2); margin-top:8px; }
+#spd b { font-size:26px; color:#fff; text-shadow:0 0 10px var(--cy); }
+#wpnP { right:22px; bottom:22px; width:270px; text-align:right; }
+#wpnP .row { display:flex; justify-content:space-between; align-items:baseline; font-family:'Orbitron'; font-size:12px; letter-spacing:.12em; margin-top:4px; }
+#wpnP .row b { color:#fff; }
+#mslState.ready { color:var(--cy); text-shadow:0 0 8px var(--cy); }
+#mslState.rl { color:var(--or); }
+#lockN { font-size:28px; font-weight:900; color:#fff; text-shadow:0 0 10px var(--mg); }
+#objP { left:50%; top:16px; transform:translateX(-50%); text-align:center; min-width:380px; padding:8px 26px; }
+#sector { font-family:'Orbitron'; font-size:10px; letter-spacing:.35em; color:var(--or); }
+#objective { font-size:18px; font-weight:600; letter-spacing:.05em; margin-top:2px; }
+#bossP { left:50%; top:86px; transform:translateX(-50%); width:min(720px, 70vw); text-align:center; display:none; padding:6px 16px 10px; border-color:rgba(255,58,90,.4); }
+#bossP .lbl { color:#ffb0c0; } #bossName { font-family:'Orbitron'; font-weight:900; font-size:18px; letter-spacing:.4em; color:#fff; text-shadow:0 0 12px var(--rd); }
+#bossP .bar { height:12px; border-color:rgba(255,58,90,.5); }
+#bossP .bar i { background:linear-gradient(90deg, #ff2a4a, #ffb030); box-shadow:0 0 14px #ff2a4a; transition:transform .15s; }
+#bossP .bar .ghost { background:rgba(255,255,255,.55); box-shadow:none; transition:transform .8s .3s; }
+#bossP .notch { position:absolute; left:50%; top:-3px; bottom:-3px; width:2px; background:#fff; box-shadow:0 0 6px #fff; }
+#scoreP { right:22px; top:22px; text-align:right; padding:8px 14px; }
+#score { font-family:'Orbitron'; font-weight:700; font-size:22px; color:#fff; }
+#combo { font-family:'Orbitron'; font-weight:900; font-size:34px; color:var(--mg); text-shadow:0 0 14px var(--mg); line-height:1; margin-top:4px; opacity:0; transition:opacity .2s; }
+#combo small { font-size:12px; letter-spacing:.3em; color:#ffc0e0; display:block; }
+#feed { position:absolute; right:24px; top:150px; text-align:right; font-family:'Orbitron'; font-size:12px; letter-spacing:.12em; }
+#feed div { margin:3px 0; color:#fff; text-shadow:0 0 6px var(--cy); animation:feed 2.2s forwards; }
+@keyframes feed { 0% { opacity:0; transform:translateX(30px);} 10% { opacity:1; transform:none;} 80% {opacity:1;} 100% { opacity:0; } }
+#reticle { position:absolute; left:0; top:0; width:0; height:0; }
+#reticle svg { position:absolute; left:-40px; top:-40px; width:80px; height:80px; overflow:visible; filter:drop-shadow(0 0 4px var(--cy)); }
+#reticle .spin { transform-origin:40px 40px; animation:spin 4s linear infinite; }
+#reticle.hot svg { filter:drop-shadow(0 0 6px var(--rd)); } #reticle.hot .c { stroke:#ff5070; }
+@keyframes spin { to { transform:rotate(360deg); } }
+#lockRing { position:absolute; border:1px dashed rgba(255,58,168,.55); border-radius:50%; display:none; box-shadow:0 0 30px rgba(255,58,168,.15) inset; }
+.lockM { position:absolute; left:0; top:0; width:44px; height:44px; margin:-22px 0 0 -22px; display:none; }
+.lockM::before, .lockM::after { content:''; position:absolute; inset:0; border:2px solid var(--mg); clip-path:polygon(0 0,30% 0,30% 8%,8% 8%,8% 30%,0 30%, 0 70%,8% 70%,8% 92%,30% 92%,30% 100%,0 100%, 100% 100%,70% 100%,70% 92%,92% 92%,92% 70%,100% 70%, 100% 30%,92% 30%,92% 8%,70% 8%,70% 0,100% 0); filter:drop-shadow(0 0 4px var(--mg)); }
+.lockM span { position:absolute; left:50%; top:100%; transform:translateX(-50%); margin-top:3px; font-family:'Orbitron'; font-size:9px; font-weight:700; letter-spacing:.2em; color:#fff; text-shadow:0 0 6px var(--mg); white-space:nowrap; }
+.lockM.fresh::before { animation:lk .25s ease-out; }
+@keyframes lk { from { transform:scale(2.4) rotate(45deg); opacity:0; } to { transform:none; opacity:1; } }
+#big { position:absolute; left:0; right:0; top:30%; text-align:center; font-family:'Orbitron'; font-weight:900; font-size:clamp(28px, 5vw, 64px); letter-spacing:.18em; color:#fff; opacity:0; }
+#big.show { animation:big 1.4s ease-out forwards; }
+#big.perfect { color:#c8fbff; text-shadow:0 0 18px var(--cy), 0 0 50px var(--cy); }
+#big.kill { color:#ffe0c0; text-shadow:0 0 18px var(--or), 0 0 40px var(--or); }
+#big.boss { color:#ffd0e0; text-shadow:0 0 18px var(--rd), 0 0 60px var(--mg); }
+#big.complete { color:#fff; text-shadow:0 0 20px var(--cy), 0 0 60px #fff; letter-spacing:.3em; }
+@keyframes big { 0% { opacity:0; transform:scale(1.6); filter:blur(8px);} 12% { opacity:1; transform:scale(1); filter:none;} 75% { opacity:1;} 100% { opacity:0; transform:scale(.98);} }
+#small { position:absolute; left:50%; top:calc(50% + 70px); transform:translateX(-50%); text-align:center; font-family:'Orbitron'; font-size:13px; letter-spacing:.25em; }
+#small div { animation:feed 1.4s forwards; margin:3px; color:#fff; text-shadow:0 0 8px var(--cy); }
+#small .warn { color:#ffb070; text-shadow:0 0 8px var(--or); } #small .near { color:#e0b0ff; text-shadow:0 0 8px var(--mg); }
+#warn { position:absolute; left:0; right:0; top:36%; height:54px; display:none; align-items:center; justify-content:center; font-family:'Orbitron'; font-weight:900; font-size:clamp(14px,2.2vw,24px); letter-spacing:.3em; color:#fff; text-shadow:0 0 12px var(--rd);
+  background:repeating-linear-gradient(-45deg, rgba(255,40,60,.22) 0 18px, rgba(0,0,0,.2) 18px 36px); border-top:2px solid rgba(255,60,80,.8); border-bottom:2px solid rgba(255,60,80,.8); animation:blink .5s steps(2) infinite; }
+@keyframes blink { 50% { opacity:.55; } }
+#prompt { position:absolute; left:50%; bottom:120px; transform:translateX(-50%); font-size:18px; font-weight:600; letter-spacing:.08em; padding:10px 20px; display:none; text-align:center; }
+#prompt b, .key { display:inline-block; min-width:26px; padding:2px 8px; margin:0 3px; border:1px solid var(--cy); color:#fff; font-family:'Orbitron'; font-size:13px; background:rgba(56,232,255,.12); box-shadow:0 0 8px rgba(56,232,255,.4); }
+#vign { position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 50%, rgba(255,0,30,.55) 100%); opacity:0; }
+#tag { position:absolute; left:22px; bottom:176px; font-family:'Orbitron'; font-size:12px; letter-spacing:.25em; color:#c8fbff; text-shadow:0 0 8px var(--cy); display:none; }
+.screen { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; background:radial-gradient(ellipse at center, rgba(4,10,24,.55), rgba(0,0,0,.92)); z-index:10; }
+.screen.on { display:flex; }
+.title { font-family:'Orbitron'; font-weight:900; font-size:clamp(40px, 8vw, 104px); letter-spacing:.12em; line-height:.95; color:#fff; text-shadow:0 0 20px var(--cy), 0 0 70px rgba(56,232,255,.6); }
+.title em { font-style:normal; color:var(--cy); }
+.sub { font-size:clamp(16px, 2.2vw, 26px); letter-spacing:.6em; color:#ffd0f0; margin-top:10px; text-shadow:0 0 12px var(--mg); }
+.btn { pointer-events:auto; margin-top:34px; padding:14px 46px; font-family:'Orbitron'; font-weight:700; letter-spacing:.3em; font-size:16px; color:#fff; background:linear-gradient(90deg, rgba(56,232,255,.25), rgba(255,58,168,.25)); border:1px solid var(--cy); cursor:pointer; clip-path:polygon(12px 0,100% 0,calc(100% - 12px) 100%,0 100%); animation:pulse 1.6s ease-in-out infinite; }
+.btn.alt { animation:none; border-color:rgba(255,255,255,.4); background:rgba(255,255,255,.06); margin-top:12px; font-size:13px; }
+@keyframes pulse { 50% { box-shadow:0 0 30px rgba(56,232,255,.6); } }
+.controls { margin-top:30px; display:grid; grid-template-columns:auto auto; gap:6px 18px; font-size:16px; text-align:left; color:#cfe; }
+.controls div:nth-child(odd) { text-align:right; }
+.stats { margin-top:24px; font-family:'Orbitron'; font-size:15px; letter-spacing:.15em; line-height:1.9; color:#cfe; }
+.stats b { color:#fff; } .rank { font-family:'Orbitron'; font-weight:900; font-size:80px; color:var(--or); text-shadow:0 0 30px var(--or); margin-top:6px; }
+.hint { margin-top:18px; font-size:14px; opacity:.6; letter-spacing:.1em; }
+#fade { position:fixed; inset:0; pointer-events:none; background:#000; opacity:0; transition:opacity .6s; z-index:9; }
+@media (max-width: 1100px), (max-height: 650px) { #hud .panel, #feed, #tag { zoom:.72; } #prompt { zoom:.8; } #big { top:26%; } }
+#fps { position:fixed; left:6px; top:4px; font:11px monospace; color:#6aa; z-index:20; display:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud">
+  <div class="scan"></div>
+  <div id="objP" class="panel hide-cine"><div id="sector">SECTOR 01 // MEGACITY</div><div id="objective">Stand by</div></div>
+  <div id="bossP" class="panel"><div class="lbl">STRATEGIC AERIAL DREADNOUGHT</div><div id="bossName">HELIOS</div><div class="bar"><i class="ghost" id="bossGhost"></i><i id="bossHp"></i><div class="notch"></div></div></div>
+  <div id="scoreP" class="panel hide-cine"><div class="lbl">SCORE</div><div id="score">0</div><div id="combo"><span id="comboN">0</span><small>CHAIN</small></div></div>
+  <div id="feed" class="hide-cine"></div>
+  <div id="hpP" class="panel hide-cine">
+    <div class="lbl">ARMOR INTEGRITY</div><div class="val"><span id="hpV">100</span>%</div><div class="bar seg"><i id="hpB"></i></div>
+    <div id="enP" style="margin-top:8px"><div class="lbl">BOOST ENERGY</div><div class="bar seg"><i id="enB"></i></div></div>
+    <div id="spd">SPD <b id="spdV">0</b> KM/H</div>
+  </div>
+  <div id="tag">◆ OVERDRIVE · DMG x2</div>
+  <div id="wpnP" class="panel hide-cine">
+    <div class="lbl">ARMAMENT</div>
+    <div class="row"><span>PULSE RIFLE</span><b>∞</b></div>
+    <div class="row"><span>MICRO MISSILE</span><b id="mslState" class="ready">READY</b></div>
+    <div class="bar"><i id="mslB"></i></div>
+    <div class="row"><span>MULTI-LOCK</span><span id="lockN">0</span></div>
+    <div class="row"><span>ENERGY BLADE</span><b>F</b></div>
+  </div>
+  <div id="lockRing"></div>
+  <div id="locks"></div>
+  <div id="reticle" class="hide-cine"><svg viewBox="0 0 80 80"><g class="spin"><path class="c" d="M40 4 A36 36 0 0 1 76 40" fill="none" stroke="#38e8ff" stroke-width="2"/><path class="c" d="M40 76 A36 36 0 0 1 4 40" fill="none" stroke="#38e8ff" stroke-width="2"/></g>
+    <circle class="c" cx="40" cy="40" r="3" fill="none" stroke="#fff" stroke-width="1.5"/><path class="c" d="M40 18v10M40 52v10M18 40h10M52 40h10" stroke="#9ff6ff" stroke-width="2"/></svg></div>
+  <div id="big"></div>
+  <div id="small"></div>
+  <div id="warn"></div>
+  <div id="prompt" class="panel"></div>
+</div>
+<div id="vign"></div>
+<div id="fade"></div>
+<div id="fps"></div>
+<div id="title" class="screen on">
+  <div class="title">MACH <em>OVER</em>DRIVE</div>
+  <div class="sub">高速機甲：超限驅動</div>
+  <div class="btn" id="startBtn">LAUNCH</div>
+  <div class="controls">
+    <div><span class="key">W A S D</span></div><div>Fly</div>
+    <div><span class="key">MOUSE</span></div><div>Aim</div>
+    <div><span class="key">LMB</span></div><div>Pulse rifle (hold)</div>
+    <div><span class="key">RMB</span> / <span class="key">E</span></div><div>Hold to multi-lock, release to fire missiles</div>
+    <div><span class="key">F</span></div><div>Energy blade lunge (tap again to combo)</div>
+    <div><span class="key">SHIFT</span></div><div>Boost</div>
+    <div><span class="key">SPACE</span></div><div>Dodge · dodge at the last moment for PERFECT DODGE</div>
+  </div>
+  <div class="hint">Best with headphones · Chrome / Edge / Safari desktop</div>
+</div>
+<div id="over" class="screen">
+  <div class="title" style="color:#ffd0d0;text-shadow:0 0 30px #ff3a3a">MECH LOST</div>
+  <div class="sub">GAME OVER</div>
+  <div class="btn" id="retryBtn">RETRY CHECKPOINT</div>
+  <div class="btn alt" id="restartBtn">RESTART MISSION</div>
+</div>
+<div id="win" class="screen">
+  <div class="title">MISSION <em>COMPLETE</em></div>
+  <div class="sub">HELIOS DESTROYED</div>
+  <div class="rank" id="rank">S</div>
+  <div class="stats" id="stats"></div>
+  <div class="btn" id="againBtn">FLY AGAIN</div>
+</div>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>
