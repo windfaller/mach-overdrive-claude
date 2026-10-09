@@ -1,6 +1,6 @@
 # MACH OVERDRIVE 高速機甲：超限驅動
 
-Play: https://windfaller.github.io/mach-overdrive-claude/ (every push to `main` runs `npm ci → npm run check → npm run build` and deploys; a type or build error blocks the deploy).
+Play: https://windfaller.github.io/mach-overdrive-claude/ (every push to `main` runs `npm ci → npm run check → npm run build → npm run smoke` and deploys only if all pass; pull requests run the same checks without deploying).
 
 Run: `npm install && npm run dev` (Vite). Build: `npm run build` → single-file `dist/index.html`.
 
@@ -20,10 +20,11 @@ Menus work with mouse, arrow keys + Enter, or D-pad + A. M mutes. Languages: EN 
 
 ## Debug & showcase
 - `?ch=0..4` start chapter (0 city, 1 highway + Raven, 2 fleet + battleship, 3 mass driver, 4 HELIOS), `&auto` skip title, `&god` invincible, `&fps` perf overlay (fps, worst frame, pixel ratio, particles, ribbons, draw calls, triangles, speed intensity), `&bot` autopilot, `&test` fixed-step low-res headless mode.
+- `?showcase=benchmark` plays all eight scenes and shows a Copy / Download JSON result panel; see docs/BENCHMARK.md. Software renderers are never certified.
 - `?showcase` adds a scene picker to the title; `?showcase=missile|blade|raven|fleet|tunnel|boss|transform|finisher&auto` jumps straight in (god mode on, scenes loop).
 
 ## QA
-`npm run build && npm run smoke` (needs `playwright` with Chromium; set `PLAYWRIGHT=/path/to/playwright/index.mjs` if it is installed globally). It drives each chapter with the bot and checks chapter progression, boss victory, restart, game over → retry, every showcase route, gamepad start / move / pause, and language switching, failing on console errors, NaN transforms, particle overflow, enemy runaway or dead targets left locked. `npm run smoke -- chapters|showcase|ui` runs one group.
+`npm run build && npm run smoke` (Playwright is a pinned devDependency; run `npx playwright install chromium` once). It drives each chapter with the bot and checks chapter progression, boss victory, restart, game over → retry, every showcase route, gamepad start / move / pause, and language switching, failing on console errors, NaN transforms, particle overflow, enemy runaway or dead targets left locked. It also runs the benchmark route in quick mode and fails if a software renderer is reported as PASS or the speed tiers are out of order. `npm run smoke -- chapters|showcase|ui|bench` runs one group.
 
 ## Hero assets (GLTF)
 Procedural models are the default and the fallback. To use authored models, fill `HERO_ASSETS` in `src/assets.ts` (files go in `public/assets/`) or pass `?hero=player:assets/player.glb,raven:assets/raven.glb,helios:assets/helios.glb`. A missing or broken file logs a warning and keeps the procedural model.
@@ -33,7 +34,9 @@ Gameplay never reads the mesh hierarchy; authored nodes are re-parented onto the
 - HELIOS nodes: modules `torso noseL noseR bridge wingL wingR limbL limbR` (they follow the ship → mech transformation), anchors `weak_port weak_starboard weak_spire core`. An animation clip whose name contains `transform` replaces the procedural transformation and is scrubbed by the same 7.5 s clock.
 
 ## Audio replacement
-Every sound is synthesized. Fill `AUDIO_ASSETS` in `src/assets.ts` with `{ sfxName: 'assets/sfx/file.ogg' }` (names: `laser missile lockTick locked chainKill melee slashHit boost dodge perfect nearMiss alarm ravenWarn bossWarning transform finisher explosion …`, see `proc` in `src/audio.ts`); a loaded sample plays instead of the synth with no gameplay change.
+Every sound is synthesized. Fill `AUDIO_ASSETS` in `src/assets.ts` with `{ sfxName: 'assets/sfx/file.ogg' }` or `{ sfxName: { url, gain } }`, or test with `?sfx=name:url,…` (names: `laser missile lockTick locked chainKill melee slashHit boost dodge perfect nearMiss alarm ravenWarn bossWarning transform finisher explosion …`, see `proc` in `src/audio.ts`); a loaded sample plays instead of the synth with no gameplay change.
+
+Asset status and the brief for authored Player / HELIOS / Raven models and the priority sounds: docs/ASSET_BRIEF.md.
 
 ## Notes
 - Visual speed is one intensity value (normal 0.4 → combat 0.55 → boost 0.75 → blade lunge 0.9 → mass driver 1.0 → finisher 1.1) driving FOV, speed lines, radial blur, chromatic aberration, camera jitter, thruster length and engine pitch (`vfxTarget` in `src/main.ts`).

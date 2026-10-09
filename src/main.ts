@@ -17,9 +17,11 @@ import { HUD } from './hud';
 import { Director } from './director';
 import { applyDom, onI18n, setLang, LANGS, tt, t } from './i18n';
 import { loadHeroAssets } from './assets';
+import { Benchmark } from './benchmark';
 
 const params = new URLSearchParams(location.search);
-const TEST = params.has('test'), BOT = params.has('bot');
+const TEST = params.has('test');
+let BOT = params.has('bot');
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
 const maxPR = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -102,7 +104,7 @@ G.onKill = (e: any, score: number, src: string) => {
   if (e.kind === 'elite') hud.big('b_ravenDown', 'kill', 1.8);
   if (src === 'melee') hud.small('m_bladeKill', 'ok');
 };
-G.onBossDead = () => { setTimeout(() => showWin(), 600); };
+G.onBossDead = () => { if (!G.benchActive) setTimeout(() => showWin(), 600); };
 
 // ---- screens & menus
 const $ = (id: string) => document.getElementById(id)!;
@@ -151,6 +153,13 @@ function startShowcase(name: string) {
   player.startTrails(); resumeMusic();
   director.showcaseStart(name);
 }
+const bench = new Benchmark({
+  gl: () => renderer.getContext(), startShowcase,
+  done: () => { toTitle(); G.benchActive = false; BOT = params.has('bot'); },
+  stats: () => ({ pr, calls: renderer.info.render.calls, tris: renderer.info.render.triangles, particles: fx.add.n + fx.smoke.n, ribbons: fx.ribbons.filter(r => r.alive).length, enemies: enemies.list.length, vfx: G.vfx }),
+}, params);
+function startBenchmark() { BOT = true; G.god = true; bench.start(); }
+(window as any).__bench = bench;
 function showWin() {
   G.state = 'victory'; hud.show(false); document.exitPointerLock?.();
   const s = G.stats; const secs = Math.round((performance.now() - s.start) / 1000);
@@ -161,12 +170,12 @@ function showWin() {
 }
 function showOver() { G.state = 'dead'; hud.show(false); document.exitPointerLock?.(); sfx.gameover(); stopMusic(1); showScreen('over'); }
 function setPause(on: boolean) {
-  if (G.state !== 'playing' || G.paused === on) return;
+  if (G.state !== 'playing' || G.paused === on || (on && G.benchActive)) return;
   G.paused = on; suspendAudio(on); showScreen(on ? 'pause' : null);
   if (on) { document.exitPointerLock?.(); menuSel.pause = 0; } else input.requestLock(canvas);
 }
 function toTitle() { G.paused = false; suspendAudio(false); G.state = 'title'; hud.show(false); resetState(); G.state = 'title'; stopMusic(0.5); world.setSection('city', true); player.startTrails(); showScreen('title'); }
-$('startBtn').onclick = () => { sfx.ui(); const sc = params.get('showcase'); if (sc && SHOWCASES.includes(sc)) startShowcase(sc); else startMission(+(params.get('ch') || 0)); };
+$('startBtn').onclick = () => { sfx.ui(); const sc = params.get('showcase'); if (sc === 'benchmark') startBenchmark(); else if (sc && SHOWCASES.includes(sc)) startShowcase(sc); else startMission(+(params.get('ch') || 0)); };
 $('retryBtn').onclick = () => startMission(director.checkpoint);
 $('restartBtn').onclick = () => startMission(0);
 $('againBtn').onclick = () => startMission(0);
@@ -175,7 +184,7 @@ $('pRetryBtn').onclick = () => { G.paused = false; startMission(director.checkpo
 $('quitBtn').onclick = () => toTitle();
 if (params.has('showcase')) {
   const box = $('showcase'); box.classList.add('on');
-  for (const n of SHOWCASES) { const b = document.createElement('div'); b.className = 'btn alt'; b.textContent = n.toUpperCase(); b.onclick = () => { sfx.ui(); startShowcase(n); }; box.appendChild(b); }
+  for (const n of [...SHOWCASES, 'benchmark']) { const b = document.createElement('div'); b.className = 'btn alt'; b.textContent = n.toUpperCase(); b.onclick = () => { sfx.ui(); if (n === 'benchmark') startBenchmark(); else startShowcase(n); }; box.appendChild(b); }
 }
 input.onLockLost(() => { if (G.state === 'playing' && !G.paused) setPause(true); });
 canvas.addEventListener('mousedown', () => { if (G.state === 'playing' && !document.pointerLockElement) input.requestLock(canvas); });
@@ -194,13 +203,16 @@ function warmup() {
 warmup();
 
 // ---- speed hierarchy: one intensity value drives FOV, lines, blur, aberration, thrusters, audio
+export const SPEED_TIERS = { normal: 0.4, combat: 0.55, boost: 0.75, blade: 0.9, tunnel: 1.0, finisher: 1.1 } as const;
 function vfxTarget() {
-  if (boss.state === 'finisher' && boss.t < 6.4) return 1.1;
-  if (director.tunnel.run || G.speedRamp === 1) return 0.8 + 0.2 * clamp((G.baseSpeed - 140) / 190, 0, 1);
-  if (player.meleeState === 'lunge') return 0.9;
-  if (player.boosting) return 0.75;
-  if (G.state === 'playing' && (enemies.list.length > 0 || boss.state === 'p1' || boss.state === 'p2')) return 0.55;
-  return 0.4;
+  const S = SPEED_TIERS;
+  if (boss.state === 'finisher' && boss.t < 6.4) return S.finisher;
+  // the mass driver sits at its own tier from the first frame (it used to start at 0.8, barely above boost)
+  if (director.tunnel.run || G.speedRamp === 1) return S.tunnel;
+  if (player.meleeState === 'lunge') return S.blade;
+  if (player.boosting) return S.boost;
+  if (G.state === 'playing' && (enemies.list.length > 0 || boss.state === 'p1' || boss.state === 'p2')) return S.combat;
+  return S.normal;
 }
 
 // ---- camera
@@ -293,6 +305,7 @@ function frame(now: number) {
   if (G.state === 'playing' || G.state === 'title') hud.update(rdt);
   if (G.direct || (TEST && !params.has('post'))) renderer.render(scene, camera); else composer.render(rdt);
   input.endFrame();
+  bench.frame(raw, rdt);
   // perf
   frameAvg = frameAvg * 0.95 + (rdt * 1000) * 0.05; fpsAcc += rdt; fpsN++; adaptT += rdt;
   if (fpsAcc > 0.5) {
@@ -328,7 +341,8 @@ function bot(dt: number) {
   input.simKey('ShiftLeft', G.director.tunnel.run || (botT % 9) < 1.2);
 }
 const scAuto = params.get('showcase');
-if (scAuto && SHOWCASES.includes(scAuto) && params.has('auto')) setTimeout(() => startShowcase(scAuto), 300);
+if (scAuto === 'benchmark' && params.has('auto')) setTimeout(() => startBenchmark(), 300);
+else if (scAuto && SHOWCASES.includes(scAuto) && params.has('auto')) setTimeout(() => startShowcase(scAuto), 300);
 else if (params.has('auto')) setTimeout(() => startMission(+(params.get('ch') || 0)), 300);
-(window as any).__game = { startMission, startShowcase, setPause, toTitle, t };
+(window as any).__game = { startMission, startShowcase, startBenchmark, setPause, toTitle, t };
 export { setMusic };

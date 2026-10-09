@@ -113,6 +113,11 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 .langs { margin-top:22px; display:flex; gap:8px; pointer-events:auto; } .langBtn { padding:5px 12px; font-family:'Orbitron'; font-size:12px; letter-spacing:.12em; border:1px solid rgba(255,255,255,.3); cursor:pointer; color:#cfe; } .langBtn.on { border-color:var(--cy); color:#fff; background:rgba(56,232,255,.18); } .langBtn.focus { outline:2px solid #fff; }
 .padhint { margin-top:10px; font-size:13px; opacity:.7; letter-spacing:.1em; } .padhint b { border:1px solid var(--cy); padding:0 6px; margin:0 3px; font-family:'Orbitron'; font-size:11px; }
 #showcase { margin-top:16px; display:none; flex-wrap:wrap; gap:6px; justify-content:center; max-width:760px; } #showcase.on { display:flex; } #showcase .btn { margin-top:0; padding:8px 14px; font-size:11px; animation:none; }
+#benchPanel { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); z-index:60; background:rgba(4,10,18,.94); border:1px solid #2bd3ff66; padding:16px 18px; font:12px monospace; color:#cfe; max-width:96vw; max-height:92vh; overflow:auto; }
+#benchPanel h3 { margin:0 0 6px; font-size:15px; letter-spacing:2px; } #benchPanel .ok { color:#5f9; } #benchPanel .bad { color:#ff6a5a; }
+#benchPanel table { border-collapse:collapse; margin:8px 0; } #benchPanel td, #benchPanel th { padding:2px 7px; text-align:right; border-bottom:1px solid #fff1; } #benchPanel td:first-child, #benchPanel th:first-child { text-align:left; }
+#benchPanel tr.bad td:first-child { color:#ff6a5a; } #benchPanel .gpu, #benchPanel .foot { color:#8ab; font-size:11px; } #benchPanel .btns { margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; }
+#benchPanel button { font:12px monospace; background:#0d2a3a; color:#cfe; border:1px solid #2bd3ff88; padding:6px 12px; cursor:pointer; }
 #fps { position:fixed; left:6px; top:4px; font:11px monospace; color:#6aa; z-index:20; display:none; }
 </style>
 </head>

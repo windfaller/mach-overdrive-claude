@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Mech } from './models';
-import { loadSamples } from './audio';
+import { loadSamples, sampleState, type SampleSpec } from './audio';
 
 /**
  * Hero asset manifest. Leave entries empty to use the procedural models (the default, always works).
@@ -8,8 +8,12 @@ import { loadSamples } from './audio';
  * ?hero=player:assets/player.glb,raven:assets/raven.glb,helios:assets/helios.glb
  */
 export const HERO_ASSETS: { player?: string; raven?: string; helios?: string } = {};
-/** Optional wav/ogg replacements keyed by sfx name (laser, missile, lockTick, locked, melee, slashHit, boost, perfect, ...). */
-export const AUDIO_ASSETS: Record<string, string> = {};
+/**
+ * Optional wav/ogg replacements keyed by sfx name (laser, missile, lockTick, locked, melee, slashHit, boost, perfect, ...),
+ * as a url or { url, gain }. Empty = every sound is synthesized. Per run: ?sfx=missile:assets/sfx/missile.ogg,finisher:...
+ * See docs/ASSET_BRIEF.md for the priority list. window.__audio.sampleState() shows what is live.
+ */
+export const AUDIO_ASSETS: Record<string, SampleSpec> = {};
 
 /** Node names the mapping layer looks for. Missing slots keep their procedural part. */
 export const MECH_SLOTS = {
@@ -81,7 +85,11 @@ function overrides() {
 
 /** Loads whatever hero assets are configured. With an empty manifest this returns immediately. */
 export async function loadHeroAssets(ctx: { player: any; enemies: any; boss: any }) {
-  if (Object.keys(AUDIO_ASSETS).length) loadSamples(AUDIO_ASSETS);
+  const sfxMap: Record<string, SampleSpec> = { ...AUDIO_ASSETS };
+  const sq = new URLSearchParams(location.search).get('sfx');
+  if (sq) for (const kv of sq.split(',')) { const [k, v] = kv.split(':'); if (k && v) sfxMap[k] = v; }
+  (window as any).__audio = { sampleState };
+  if (Object.keys(sfxMap).length) loadSamples(sfxMap);
   const list = overrides(); const keys = Object.keys(list).filter(k => list[k]);
   if (!keys.length) return;
   const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
