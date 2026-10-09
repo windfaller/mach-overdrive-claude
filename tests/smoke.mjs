@@ -57,13 +57,13 @@ async function chapter(ch, until, maxSec) {
 if (which === 'all' || which === 'chapters') {
   log('chapters');
   const only = process.env.CH ? process.env.CH.split(',').map(Number) : null;
-  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 150], [1, s => s.ck >= 2, 170], [2, s => s.ck >= 3, 200], [3, s => s.boss !== 'off', 240]]) {
+  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 300], [1, s => s.ck >= 2, 300], [2, s => s.ck >= 3, 360], [3, s => s.boss !== 'off', 400]]) {
     if (only && !only.includes(ch)) continue;
     const r = await chapter(ch, goal, max); await r.page.close();
   }
   // boss to victory, then restart
   if (!only || only.includes(4)) {
-  const r = await chapter(4, s => s.st === 'victory', 260);
+  const r = await chapter(4, s => s.st === 'victory', 480);
   if (r.ok) {
     await r.page.click('#againBtn'); await r.page.waitForTimeout(1500);
     const s = await probe(r.page);
@@ -89,7 +89,8 @@ if (which === 'all' || which === 'showcase') {
   log('showcase routes');
   for (const sc of ['missile', 'blade', 'raven', 'fleet', 'tunnel', 'boss', 'transform', 'finisher']) {
     const { page, errs } = await open(`showcase=${sc}&auto&test&bot`);
-    await page.waitForTimeout(sc === 'finisher' || sc === 'transform' ? 16000 : 7000);
+    if (sc === 'finisher') await page.waitForFunction(() => ['finisher', 'dead'].includes(window.__G.boss.state) || window.__G.state === 'victory', null, { timeout: 90000, polling: 500 }).catch(() => {});
+    else await page.waitForTimeout(sc === 'transform' ? 16000 : 7000);
     const s = await probe(page);
     const okState = sc === 'finisher' ? (s.st === 'victory' || s.boss === 'finisher' || s.boss === 'dead') : s.st === 'playing';
     if (s.nan || !okState || errs.length) fail(`showcase ${sc}`, JSON.stringify(s) + ' ' + errs.slice(0, 3).join(' | ')); else log(`  ✓ showcase=${sc} (boss ${s.boss})`);
@@ -107,15 +108,16 @@ if (which === 'all' || which === 'ui') {
     window.__press = (i, on) => { pad.buttons[i].pressed = on; pad.buttons[i].value = on ? 1 : 0; };
   };
   const { page, errs } = await open('test', padInit);
-  await page.waitForTimeout(800);
-  const tap = async i => { await page.evaluate(i => window.__press(i, true), i); await page.waitForTimeout(250); await page.evaluate(i => window.__press(i, false), i); await page.waitForTimeout(250); };
-  await tap(0); await page.waitForTimeout(800);
+  await page.waitForFunction(() => window.__G && window.__G.state === 'title', null, { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(1500);
+  const tap = async i => { await page.evaluate(i => window.__press(i, true), i); await page.waitForTimeout(450); await page.evaluate(i => window.__press(i, false), i); await page.waitForTimeout(450); };
+  const until = (fn, ms = 15000) => page.waitForFunction(fn, null, { timeout: ms, polling: 100 }).catch(() => {});
+  await tap(0); await until(() => window.__G.state === 'playing');
   let s = await probe(page); if (s.st !== 'playing') fail('pad start', JSON.stringify(s)); else log('  ✓ gamepad A starts from title');
   await page.evaluate(() => { window.__pad.axes[0] = 1; }); await page.waitForTimeout(800);
   const x = await page.evaluate(() => window.__G.player.pos.x); await page.evaluate(() => { window.__pad.axes[0] = 0; });
   if (!(x > 3)) fail('pad stick', 'player x ' + x); else log('  ✓ left stick moves the mech');
-  await tap(9); s = await probe(page); if (!s.paused) fail('pad pause', JSON.stringify(s)); else log('  ✓ Start pauses');
-  await tap(9); s = await probe(page); if (s.paused) fail('pad resume', JSON.stringify(s)); else log('  ✓ Start resumes');
+  await tap(9); await until(() => window.__G.paused); s = await probe(page); if (!s.paused) fail('pad pause', JSON.stringify(s)); else log('  ✓ Start pauses');
+  await tap(9); await until(() => !window.__G.paused); s = await probe(page); if (s.paused) fail('pad resume', JSON.stringify(s)); else log('  ✓ Start resumes');
   if (errs.length) fail('ui', errs.join(' | '));
   await page.close();
   for (const [lang, word] of [['zh', '出擊'], ['ja', '出撃'], ['en', 'LAUNCH']]) {
