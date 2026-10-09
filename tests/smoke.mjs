@@ -1,4 +1,4 @@
-// Headless smoke test. Build first (npm run build), then: npm run smoke [-- chapters|showcase|ui|all]
+// Headless smoke test. Build first (npm run build), then: npm run smoke [-- chapters|showcase|ui|bench|all]
 // Uses the bot autopilot (?bot) in god mode with a fixed timestep (?test) and checks each chapter
 // advances, the boss reaches victory, restart works, and nothing goes NaN / leaks / errors.
 import { fileURLToPath } from 'node:url';
@@ -120,6 +120,30 @@ if (which === 'all' || which === 'ui') {
     const txt = await o.page.textContent('#startBtn'); if (txt.trim() !== word) fail('lang ' + lang, txt); else log(`  ✓ lang=${lang} -> ${word}`);
     await o.page.close();
   }
+}
+if (which === 'all' || which === 'bench') {
+  log('benchmark');
+  // ?showcase=benchmark runs all eight scenes; benchquick = 2 s each. Under SwiftShader it must never PASS.
+  const { page, errs } = await open('showcase=benchmark&auto&test&benchquick');
+  await page.waitForFunction(() => !!window.__benchmark, null, { timeout: 420000 }).catch(() => {});
+  const rep = await page.evaluate(() => window.__benchmark);
+  if (!rep) fail('benchmark', 'did not finish');
+  else {
+    const missing = rep.scenes.filter(s => !s.reached).map(s => s.scene);
+    const keys = ['fps', 'avgMs', 'p95Ms', 'p99Ms', 'worstMs', 'spikes33', 'minPixelRatio', 'maxPixelRatio', 'peakDrawCalls', 'peakTrisK', 'peakParticles', 'peakRibbons'];
+    const pk = n => rep.scenes.find(s => s.scene === n)?.peakSpeedIntensity ?? 0;
+    if (rep.scenes.length !== 8) fail('benchmark', 'scene count ' + rep.scenes.length);
+    else if (missing.length) fail('benchmark', 'scenes not reached: ' + missing.join(', '));
+    else if (rep.scenes.some(s => keys.some(k => typeof s[k] !== 'number'))) fail('benchmark', 'missing metrics');
+    else log(`  ✓ benchmark ran ${rep.scenes.length} scenes`);
+    if (rep.gpu.software && rep.pass) fail('benchmark', 'software renderer reported PASS');
+    else log(`  ✓ renderer "${rep.gpu.renderer.slice(0, 40)}" software=${rep.gpu.software} → ${rep.status}`);
+    if (!(pk('tunnel') >= 0.95 && pk('finisher') >= 1.05 && pk('tunnel') > pk('missile'))) fail('speed tiers', JSON.stringify(rep.scenes.map(s => [s.scene, s.peakSpeedIntensity])));
+    else log(`  ✓ speed tiers: tunnel ${pk('tunnel')} · finisher ${pk('finisher')} · missile ${pk('missile')}`);
+    if (!(await page.isVisible('#benchPanel'))) fail('benchmark', 'result panel not shown'); else log('  ✓ result panel with Copy / Download JSON');
+  }
+  if (errs.length) fail('benchmark', 'console errors: ' + [...new Set(errs)].slice(0, 5).join(' | '));
+  await page.close();
 }
 await browser.close();
 log(failures ? `\n${failures} failure(s)` : '\nall smoke checks passed');

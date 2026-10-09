@@ -118,15 +118,22 @@ const proc = {
 
 type SfxName = keyof typeof proc;
 // ---- asset replacement hook: a loaded sample for a name plays instead of the synthesized version
-const samples: Partial<Record<string, AudioBuffer>> = {};
-export async function loadSamples(map: Record<string, string>) {
+const samples: Partial<Record<string, { b: AudioBuffer; gain: number }>> = {};
+/** Each entry is a url, or { url, gain } to trim a produced sample against the mix (gain 1 = as mastered). */
+export type SampleSpec = string | { url: string; gain?: number };
+export async function loadSamples(map: Record<string, SampleSpec>) {
   initAudio(); if (!ctx) return;
-  await Promise.all(Object.entries(map).map(async ([k, url]) => {
-    try { const r = await fetch(url); if (r.ok) samples[k] = await ctx.decodeAudioData(await r.arrayBuffer()); } catch (e) { console.warn('sample', k, e); }
+  await Promise.all(Object.entries(map).map(async ([k, spec]) => {
+    const url = typeof spec === 'string' ? spec : spec.url, gain = typeof spec === 'string' ? 1 : spec.gain ?? 1;
+    if (!(k in proc)) console.warn(`[audio] "${k}" is not a sound event; known: ${Object.keys(proc).join(' ')}`);
+    try { const r = await fetch(url); if (r.ok) { samples[k] = { b: await ctx.decodeAudioData(await r.arrayBuffer()), gain }; console.info(`[audio] ${k} <- ${url}`); } else console.warn(`[audio] ${k}: ${url} ${r.status}, keeping synth`); }
+    catch (e) { console.warn(`[audio] ${k} failed, keeping synth`, e); }
   }));
 }
+/** Which events play a produced sample vs. the synthesizer (for the intake checklist). */
+export function sampleState() { const out: Record<string, string> = {}; for (const k of Object.keys(proc)) out[k] = samples[k] ? `sample ×${samples[k]!.gain}` : 'procedural'; return out; }
 function playSample(b: AudioBuffer, vol = 1) { const s = ctx.createBufferSource(); s.buffer = b; const g = ctx.createGain(); g.gain.value = vol; s.connect(g); g.connect(sfxBus); s.start(); }
-export const sfx = new Proxy(proc, { get(o, k: string) { const f = (o as any)[k]; return (...a: any[]) => { const b = samples[k]; if (b && ctx) { if (gate('smp' + k, 30)) playSample(b); } else if (f) f(...a); }; } }) as typeof proc;
+export const sfx = new Proxy(proc, { get(o, k: string) { const f = (o as any)[k]; return (...a: any[]) => { const sm = samples[k]; if (sm && ctx) { if (gate('smp' + k, 30)) playSample(sm.b, sm.gain); } else if (f) f(...a); }; } }) as typeof proc;
 export type { SfxName };
 export function suspendAudio(on: boolean) { if (!ctx) return; if (on) ctx.suspend(); else ctx.resume(); }
 /** Pull everything down for a beat of silence (finisher), then restore. */

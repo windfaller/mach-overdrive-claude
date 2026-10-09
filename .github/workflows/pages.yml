@@ -2,17 +2,19 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
   pages: write
   id-token: write
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,13 +22,19 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Chromium build pinned by the exact playwright version in devDependencies
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
+      # deploy gate: a failing smoke test fails this job, so the deploy job never runs
+      - run: npm run smoke
+      - if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: dist
   deploy:
     needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
