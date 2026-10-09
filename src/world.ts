@@ -170,7 +170,7 @@ export class World {
     const bg = new THREE.BoxGeometry(1, 1, 1);
     const N = 340; const seeds = new Float32Array(N); for (let i = 0; i < N; i++) seeds[i] = Math.random();
     bg.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
-    this.bMat = new THREE.ShaderMaterial({ uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uBase: { value: new THREE.Color(0x10121c) }, uW1: { value: new THREE.Color(0.95, 0.55, 0.25) }, uW2: { value: new THREE.Color(0.2, 0.9, 1.6) }, uEdge: { value: new THREE.Color(1.8, 0.25, 1.3) }, uTime: { value: 0 } }]), vertexShader: bVert, fragmentShader: bFrag, fog: true });
+    this.bMat = new THREE.ShaderMaterial({ uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uBase: { value: new THREE.Color(0x10121c) }, uW1: { value: new THREE.Color(0.42, 0.46, 0.58) }, uW2: { value: new THREE.Color(0.12, 0.55, 1.0) }, uEdge: { value: new THREE.Color(1.8, 0.25, 1.3) }, uTime: { value: 0 } }]), vertexShader: bVert, fragmentShader: bFrag, fog: true });
     this.bld = new THREE.InstancedMesh(bg, this.bMat, N); this.bld.frustumCulled = false; this.bld.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     for (let i = 0; i < N; i++) this.bRec.push({ x: 0, y: 0, z: FAR + (i / N) * SPAN, w: 0, h: 0, d: 0, v: 0, on: false, kind: 0 });
     scene.add(this.bld);

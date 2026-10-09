@@ -11,11 +11,12 @@ export class HUD {
   root = $('hud'); hpB = $('hpB'); hpV = $('hpV'); hpP = $('hpP'); enB = $('enB'); enP = $('enP'); spdV = $('spdV'); msl = $('mslState'); mslB = $('mslB'); lockN = $('lockN');
   bossP = $('bossP'); bossHp = $('bossHp'); bossGhost = $('bossGhost'); score = $('score'); combo = $('combo'); comboN = $('comboN'); feed = $('feed');
   ret = $('reticle'); ring = $('lockRing'); bigE = $('big'); smallE = $('small'); warnE = $('warn'); promptE = $('prompt'); vign = $('vign'); tag = $('tag');
-  obj = $('objective'); sector = $('sector'); ohE = $('overheat'); markers: HTMLDivElement[] = []; wpM: HTMLDivElement[] = []; warnT = 0; promptT = 0; vignA = 0; lastHp = -1; lastBoss = -1;
+  obj = $('objective'); sector = $('sector'); ohE = $('overheat'); markers: HTMLDivElement[] = []; thM: HTMLDivElement[] = []; wpM: HTMLDivElement[] = []; warnT = 0; promptT = 0; vignA = 0; lastHp = -1; lastBoss = -1;
   cur = { prompt: ['', {}] as [string, P], obj: '', sector: '', warn: '' }; lastLocks = 0; pulseT = 0;
   constructor() {
     const box = $('locks');
     for (let i = 0; i < 16; i++) { const d = document.createElement('div'); d.className = 'lockM'; d.innerHTML = '<span></span>'; box.appendChild(d); this.markers.push(d); }
+    for (let i = 0; i < 28; i++) { const d = document.createElement('div'); d.className = 'thM'; box.appendChild(d); this.thM.push(d); }
     for (let i = 0; i < 3; i++) { const d = document.createElement('div'); d.className = 'wpM'; d.innerHTML = '<i></i><span></span>'; box.appendChild(d); this.wpM.push(d); }
     onI18n(() => this.relabel());
   }
@@ -89,6 +90,21 @@ export class HUD {
       (m.firstChild as HTMLElement).textContent = c.n > 1 ? tt('lockedN', { n: c.n }) : tt('locked');
     }
     for (; mi < this.markers.length; mi++) this.markers[mi].style.display = 'none';
+    // hostile brackets: every live enemy in front gets a warm corner frame sized to its projected size
+    let ti = 0;
+    if (!G.cinematic) {
+      const k = G.height / (2 * Math.tan(G.camera.fov * Math.PI / 360));
+      for (const e of G.enemies.list) {
+        if (ti >= this.thM.length) break;
+        if (!e.alive || counts.has(e) || e.kind === 'shipcore') continue;
+        const d = G.camera.position.distanceTo(e.pos); if (d > 900 || d < 6) continue;
+        toScreen(e.pos, scr); if (!scr.on) continue;
+        const px = clamp(e.radius * 1.5 * k / d, 9, 60), m = this.thM[ti++];
+        m.style.display = 'block'; m.style.transform = `translate(${scr.x}px, ${scr.y}px)`; m.style.width = m.style.height = px * 2 + 'px'; m.style.margin = -px + 'px 0 0 ' + -px + 'px';
+        m.className = e.kind === 'elite' ? 'thM elite' : e === p.aimTarget ? 'thM hot' : 'thM';
+      }
+    }
+    for (; ti < this.thM.length; ti++) this.thM[ti].style.display = 'none';
     // boss weak-point markers
     const b = G.boss; const showWp = b.state === 'p1' && !G.cinematic;
     for (let i = 0; i < this.wpM.length; i++) {

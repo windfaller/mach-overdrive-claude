@@ -17,9 +17,22 @@ export const mats = {
   dark: new THREE.MeshStandardMaterial({ color: 0x323846, metalness: 0.8, roughness: 0.3, envMapIntensity: 1.4 }),
   mid: new THREE.MeshStandardMaterial({ color: 0x4a5160, metalness: 0.75, roughness: 0.4, envMapIntensity: 1.0 }),
   light: new THREE.MeshStandardMaterial({ color: 0x9aa3b4, metalness: 0.55, roughness: 0.35, envMapIntensity: 1.2 }),
-  enemyDark: new THREE.MeshStandardMaterial({ color: 0x23201f, metalness: 0.8, roughness: 0.38, envMapIntensity: 1.0 }),
-  enemyMid: new THREE.MeshStandardMaterial({ color: 0x5a4a44, metalness: 0.7, roughness: 0.45 }),
+  enemyDark: new THREE.MeshStandardMaterial({ color: 0x3a2f2b, metalness: 0.7, roughness: 0.4, envMapIntensity: 1.0 }),
+  enemyMid: new THREE.MeshStandardMaterial({ color: 0x7a5a4c, metalness: 0.6, roughness: 0.45 }),
 };
+/** Readability: a view-angle rim glow so hostile hulls separate from the dark, busy city. Warm = hostile. */
+export const ENEMY_RIM = [1.5, 0.42, 0.12], RAVEN_RIM = [1.7, 0.18, 0.55];
+export function addRim(m: THREE.MeshStandardMaterial, rgb: number[], pow = 2.2) {
+  const col = new THREE.Color(rgb[0], rgb[1], rgb[2]);
+  m.onBeforeCompile = s => {
+    s.uniforms.uRim = { value: col };
+    s.fragmentShader = 'uniform vec3 uRim;\n' + s.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      { float fr = 1.0 - clamp(abs(dot(normalize(vViewPosition), normal)), 0.0, 1.0); totalEmissiveRadiance += uRim * pow(fr, ${pow.toFixed(2)}); }`);
+  };
+  m.customProgramCacheKey = () => 'rim' + pow;
+  return m;
+}
+addRim(mats.enemyDark, ENEMY_RIM); addRim(mats.enemyMid, ENEMY_RIM, 2.6);
 export const glow = (r: number, g: number, b: number) => { const m = new THREE.MeshBasicMaterial(); m.color.setRGB(r, g, b); return m; };
 export const additive = (r: number, g: number, b: number, o = 1) => { const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false }); m.color.setRGB(r, g, b); return m; };
 
@@ -177,11 +190,11 @@ export function buildMech(glowRGB: number[], md: THREE.Material = mats.dark, mm:
   };
   const wingL = wing(-1), wingR = wing(1);
   const flames: THREE.Mesh[] = [];
-  const fm = additive(flameRGB[0], flameRGB[1], flameRGB[2], 0.9);
+  const fm = additive(flameRGB[0] * 0.8, flameRGB[1] * 0.8, flameRGB[2] * 0.8, 0.6);
   for (const s of [-1, 1]) {
     const f = new THREE.Mesh(new THREE.ConeGeometry(0.24, 1.8, 10, 1, true).rotateX(Math.PI / 2).translate(0, 0, 0.9), fm);
     f.position.set(s * (R ? 0.42 : 0.5), 1.85 - 0.28, 0.55 + 1.06); body.add(f); flames.push(f);
-    const f2 = new THREE.Mesh(new THREE.ConeGeometry(0.12, 1.2, 8, 1, true).rotateX(Math.PI / 2).translate(0, 0, 0.6), glow(1.6, 2.2, 2.8)); f.add(f2);
+    const f2 = new THREE.Mesh(new THREE.ConeGeometry(0.12, 1.2, 8, 1, true).rotateX(Math.PI / 2).translate(0, 0, 0.6), additive(0.7, 1.1, 1.5, 0.8)); f.add(f2);
   }
   const podL = new THREE.Object3D(); podL.position.set(0, 0.35, -0.2); podGL.add(podL);
   const podR = new THREE.Object3D(); podR.position.set(0, 0.35, -0.2); podGR.add(podR);

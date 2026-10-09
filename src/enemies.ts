@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { G, rand, clamp, damp, lerp, segSphere, shake, Target, easeOut, slowmo, flash } from './core';
 import { mapMech } from './assets';
-import { buildDrone, buildFighter, buildHeavy, buildMech, buildBattleshipHalf, glow, mats, Mech, additive } from './models';
+import { buildDrone, buildFighter, buildHeavy, buildMech, buildBattleshipHalf, glow, mats, Mech, additive, addRim, ENEMY_RIM, RAVEN_RIM } from './models';
 import { fx, Ribbon } from './fx';
 import { sfx } from './audio';
 
@@ -19,7 +19,7 @@ export class Enemy implements Target {
   lockable = true; maxLocks = 1; locks = 0; age = 0; d: any = {}; flashT = 0; flashMat: THREE.MeshStandardMaterial | null = null; mech?: Mech; spin?: THREE.Object3D;
   constructor(kind: string, mesh: THREE.Group) {
     this.kind = kind; this.mesh = mesh; this.pos = mesh.position; mesh.visible = false;
-    const fm = (kind === 'elite' ? mats.dark : mats.enemyDark).clone() as THREE.MeshStandardMaterial; fm.emissive = new THREE.Color(0, 0, 0); this.flashMat = fm;
+    const fm = (kind === 'elite' ? mats.dark : mats.enemyDark).clone() as THREE.MeshStandardMaterial; fm.emissive = new THREE.Color(0, 0, 0); addRim(fm, kind === 'elite' ? RAVEN_RIM : ENEMY_RIM, kind === 'elite' ? 2.0 : 2.2); this.flashMat = fm;
     mesh.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && (m.material === mats.enemyDark || m.material === mats.dark)) m.material = fm; });
     this.spin = mesh.getObjectByName('spin') || undefined;
   }
@@ -91,7 +91,7 @@ export class Enemies {
   spawn(kind: string, d: any = {}): Enemy | null {
     const e = this.pools[kind].find(x => !x.alive && !this.active.includes(x)); if (!e) return null;
     const s = STATS[kind]; e.hp = e.maxHp = s.hp * (d.hpMul || 1); e.radius = s.r; e.maxLocks = s.locks; e.locks = 0; e.age = 0; e.alive = true; e.lockable = true;
-    e.d = { ...d, shoot: d.shoot ?? true }; e.vel.set(0, 0, 0); e.flashT = 0; e.mesh.visible = true; e.mesh.scale.setScalar(1);
+    e.d = { ...d, shoot: d.shoot ?? true }; e.vel.set(0, 0, 0); e.flashT = 0; e.mesh.visible = true; e.mesh.scale.setScalar(kind === 'drone' || kind === 'fighter' ? 1.3 : 1);
     if (d.from) e.pos.copy(d.from); else e.pos.set(0, 0, -500);
     if (kind === 'elite') {
       e.d.state = 'enter'; e.d.t = 0; e.d.dodgeCd = 0; e.d.atk = 0; e.d.target = new THREE.Vector3(0, 6, -60);

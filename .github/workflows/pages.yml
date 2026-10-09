@@ -1,14 +1,15 @@
-name: Deploy to GitHub Pages
+name: CI / Deploy
+# npm ci -> check -> build -> smoke (sharded) -> deploy. Any failure blocks the deploy.
+# The deploy job only runs when the repository variable DEPLOY_PAGES is "true" (Pages is currently off).
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
-  group: pages
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -22,15 +23,65 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: dist
           path: dist
-  deploy:
+          retention-days: 3
+  smoke:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { group: chapters, ch: "0,1,9" }
+          - { group: chapters, ch: "2" }
+          - { group: chapters, ch: "3" }
+          - { group: chapters, ch: "4" }
+          - { group: showcase, ch: "" }
+          - { group: ui, ch: "" }
+          - { group: bench, ch: "" }
+          - { group: hero, ch: "" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - id: pw
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ steps.pw.outputs.version }}
+      - run: npx playwright install --with-deps chromium
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - run: npm run smoke -- ${{ matrix.group }}
+        env:
+          CH: ${{ matrix.ch }}
+  deploy:
+    needs: [build, smoke]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DEPLOY_PAGES == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
       - id: deployment
         uses: actions/deploy-pages@v4

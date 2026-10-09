@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { G, damp, clamp, rand, flash, toScreen, hitstop } from './core';
+import { G, damp, clamp, lerp, rand, flash, toScreen, hitstop } from './core';
 import * as input from './input';
 import { initAudio, setEngine, sfx, stopMusic, resumeMusic, setMusic, suspendAudio } from './audio';
 import { fx } from './fx';
@@ -17,9 +17,10 @@ import { HUD } from './hud';
 import { Director } from './director';
 import { applyDom, onI18n, setLang, LANGS, tt, t } from './i18n';
 import { loadHeroAssets } from './assets';
+import { Bench } from './bench';
 
 const params = new URLSearchParams(location.search);
-const TEST = params.has('test'), BOT = params.has('bot');
+const TEST = params.has('test'); let BOT = params.has('bot');
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
 const maxPR = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -40,10 +41,16 @@ const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, 
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.6, 0.4, 1.05);
 composer.addPass(bloom);
+// HDR guard: a point light right on a surface can overflow the half-float target to inf/NaN, which bloom then
+// smears into a fully black frame. Scrub non-finite texels before they reach the blur chain.
+const SAN = 'vec3 san(vec3 c){ return (c.r < 6e4 && c.g < 6e4 && c.b < 6e4 && c.r >= 0.0 && c.g >= 0.0 && c.b >= 0.0) ? min(c, vec3(48.0)) : vec3(0.0); }\n';
+{ const m = (bloom as any).materialHighPassFilter as THREE.ShaderMaterial;
+  m.fragmentShader = m.fragmentShader.replace('void main() {', SAN + 'void main() {').replace('vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = texture2D( tDiffuse, vUv ); texel.rgb = san(texel.rgb);'); m.needsUpdate = true; }
 const finalPass = new ShaderPass({
   uniforms: { tDiffuse: { value: null }, uSpeed: { value: 0 }, uFlash: { value: 0 }, uFlashC: { value: new THREE.Color(1, 1, 1) }, uAberr: { value: 0.002 } },
   vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `uniform sampler2D tDiffuse; uniform float uSpeed, uFlash, uAberr; uniform vec3 uFlashC; varying vec2 vUv;
+  ${SAN}
   void main(){ vec2 c = vUv - 0.5; float d = length(c);
     float amt = uSpeed * 0.06 * smoothstep(0.12, 0.75, d);
     vec3 col = vec3(0.0);
@@ -52,7 +59,7 @@ const finalPass = new ShaderPass({
     float ab = (uAberr + uSpeed * 0.006) * d;
     col.r = mix(col.r, texture2D(tDiffuse, vUv + c * ab).r, 0.8);
     col.b = mix(col.b, texture2D(tDiffuse, vUv - c * ab).b, 0.8);
-    col *= 1.0 - smoothstep(0.42, 0.95, d) * 0.6;
+    col = san(col); col *= 1.0 - smoothstep(0.42, 0.95, d) * 0.6;
     col = mix(col, uFlashC * 4.0, clamp(uFlash, 0.0, 1.0));
     gl_FragColor = vec4(col, 1.0); }`,
 });
@@ -166,7 +173,7 @@ function setPause(on: boolean) {
   if (on) { document.exitPointerLock?.(); menuSel.pause = 0; } else input.requestLock(canvas);
 }
 function toTitle() { G.paused = false; suspendAudio(false); G.state = 'title'; hud.show(false); resetState(); G.state = 'title'; stopMusic(0.5); world.setSection('city', true); player.startTrails(); showScreen('title'); }
-$('startBtn').onclick = () => { sfx.ui(); const sc = params.get('showcase'); if (sc && SHOWCASES.includes(sc)) startShowcase(sc); else startMission(+(params.get('ch') || 0)); };
+$('startBtn').onclick = () => { sfx.ui(); const sc = params.get('showcase'); if (sc === 'benchmark') G.bench.start(); else if (sc && SHOWCASES.includes(sc)) startShowcase(sc); else startMission(+(params.get('ch') || 0)); };
 $('retryBtn').onclick = () => startMission(director.checkpoint);
 $('restartBtn').onclick = () => startMission(0);
 $('againBtn').onclick = () => startMission(0);
@@ -175,7 +182,7 @@ $('pRetryBtn').onclick = () => { G.paused = false; startMission(director.checkpo
 $('quitBtn').onclick = () => toTitle();
 if (params.has('showcase')) {
   const box = $('showcase'); box.classList.add('on');
-  for (const n of SHOWCASES) { const b = document.createElement('div'); b.className = 'btn alt'; b.textContent = n.toUpperCase(); b.onclick = () => { sfx.ui(); startShowcase(n); }; box.appendChild(b); }
+  for (const n of [...SHOWCASES, 'benchmark']) { const b = document.createElement('div'); b.className = 'btn alt'; b.textContent = n.toUpperCase(); b.onclick = () => { sfx.ui(); if (n === 'benchmark') G.bench.start(); else startShowcase(n); }; box.appendChild(b); }
 }
 input.onLockLost(() => { if (G.state === 'playing' && !G.paused) setPause(true); });
 canvas.addEventListener('mousedown', () => { if (G.state === 'playing' && !document.pointerLockElement) input.requestLock(canvas); });
@@ -196,7 +203,8 @@ warmup();
 // ---- speed hierarchy: one intensity value drives FOV, lines, blur, aberration, thrusters, audio
 function vfxTarget() {
   if (boss.state === 'finisher' && boss.t < 6.4) return 1.1;
-  if (director.tunnel.run || G.speedRamp === 1) return 0.8 + 0.2 * clamp((G.baseSpeed - 140) / 190, 0, 1);
+  if (director.tunnel.run) return 1.0;
+  if (G.speedRamp === 1) return 0.8 + 0.2 * clamp((G.baseSpeed - 140) / 190, 0, 1);
   if (player.meleeState === 'lunge') return 0.9;
   if (player.boosting) return 0.75;
   if (G.state === 'playing' && (enemies.list.length > 0 || boss.state === 'p1' || boss.state === 'p2')) return 0.55;
@@ -217,11 +225,24 @@ function updateCamera(dt: number, rdt: number) {
   } else {
     const ndc = input.aimNDC();
     const title = G.state === 'title';
-    tv.set(P.x * 0.72 + (title ? Math.sin(G.time * 0.3) * 8 : 0), P.y * 0.65 + 2.7 + (title ? 1 : 0), P.z + 10 + (V - 0.4) * 3.2 + (title ? -2 : 0));
-    camera.position.x = damp(camera.position.x, tv.x, 6, rdt); camera.position.y = damp(camera.position.y, tv.y, 6, rdt); camera.position.z = damp(camera.position.z, tv.z, player.meleeState === 'lunge' ? 14 : 8, rdt);
-    tl.set(P.x * 0.85 + ndc.x * 9, P.y * 0.8 + 1.4 + ndc.y * 5, P.z - 40);
+    const melee = player.meleeCamT > 0 && !title;
+    if (melee) {
+      // blade camera: step off the mech's shoulder (away from the target) and frame the target, so the mech never hides the hit
+      const F = player.meleeFocus; let sd = player.meleeSide; if (Math.abs(P.x + sd * 6) > 28) sd = -sd;
+      tv.set(clamp(P.x + sd * 6, -30, 30), P.y + 4.2, P.z + 15);
+      tl.set(lerp(P.x, F.x, 0.7), lerp(P.y, F.y, 0.7) + 1, lerp(P.z, F.z, 0.7));
+      const kf = player.meleeState === 'lunge' ? 22 : 9;
+      camera.position.x = damp(camera.position.x, tv.x, kf, rdt); camera.position.y = damp(camera.position.y, tv.y, kf, rdt); camera.position.z = damp(camera.position.z, tv.z, kf + 6, rdt);
+      camLook.x = damp(camLook.x, tl.x, 12, rdt); camLook.y = damp(camLook.y, tl.y, 12, rdt); camLook.z = damp(camLook.z, tl.z, 12, rdt);
+      fov = damp(fov, 66 + V * 10, 5, rdt);
+    } else {
+    // chase framing: the mech sits in the lower third so the reticle lane and enemies stay clear
+    tv.set(P.x * 0.72 + (title ? Math.sin(G.time * 0.3) * 8 : 0), P.y * 0.65 + 3.5 + (title ? 0.2 : 0), P.z + 11.5 + (V - 0.4) * 3.2 + (title ? -3 : 0));
+    camera.position.x = damp(camera.position.x, tv.x, 6, rdt); camera.position.y = damp(camera.position.y, tv.y, 6, rdt); camera.position.z = damp(camera.position.z, tv.z, 8, rdt);
+    tl.set(P.x * 0.85 + ndc.x * 9, P.y * 0.8 + 3.4 + ndc.y * 5 - (title ? 1.6 : 0), P.z - 40);
     camLook.x = damp(camLook.x, tl.x, 8, rdt); camLook.y = damp(camLook.y, tl.y, 8, rdt); camLook.z = damp(camLook.z, tl.z, 10, rdt);
-    fov = damp(fov, 62 + V * 16, 4, rdt);
+    fov = damp(fov, 60 + V * 18, 4, rdt);
+    }
     roll = damp(roll, -player.vel.x * 0.003, 3, rdt);
   }
   camera.lookAt(camLook); camera.rotateZ(roll);
@@ -262,7 +283,7 @@ function frame(now: number) {
   speedMul = damp(speedMul, G.speedOverride || boostMul, player.boosting ? 4 : 2, rdt);
   G.speed = G.baseSpeed * speedMul;
   const vt = vfxTarget(); G.vfx = damp(G.vfx, vt, vt > G.vfx ? 7 : 2.2, rdt);
-  G.lineIntensity = clamp((G.vfx - 0.3) * 1.25, 0.08, 1.05);
+  G.lineIntensity = clamp(Math.pow(Math.max(0, G.vfx - 0.35) / 0.75, 1.4), 0.04, 1.05); // calm at cruise, steep toward the top tiers
   // targets
   const tl2 = G.targetList as any[]; tl2.length = 0;
   for (const b of boss.targets) if (b.alive && b.kind !== 'hull') tl2.push(b);
@@ -287,23 +308,26 @@ function frame(now: number) {
   // post
   G.flash = Math.max(0, G.flash - rdt * 2.2);
   finalPass.uniforms.uFlash.value = G.flash; finalPass.uniforms.uFlashC.value.copy(G.flashColor);
-  finalPass.uniforms.uSpeed.value = damp(finalPass.uniforms.uSpeed.value, Math.max(0, G.vfx - 0.45) * 1.5, 6, rdt);
-  finalPass.uniforms.uAberr.value = 0.0012 + Math.max(0, G.vfx - 0.5) * 0.006;
+  finalPass.uniforms.uSpeed.value = damp(finalPass.uniforms.uSpeed.value, Math.max(0, G.vfx - 0.5) * 1.6, 6, rdt);
+  finalPass.uniforms.uAberr.value = 0.0005 + Math.max(0, G.vfx - 0.6) * 0.007;
   bloom.strength = 0.6 + G.flash * 0.6;
   if (G.state === 'playing' || G.state === 'title') hud.update(rdt);
+  // adaptive resolution must change BEFORE drawing: resizing the canvas clears it, and a resize after the
+  // draw put a fully black frame on screen every time the pixel ratio stepped (e.g. on heavy blade hits)
+  if (adaptT > 1.5 && !TEST) {
+    adaptT = 0;
+    if (frameAvg > 20 && pr > 0.6) { pr = Math.max(0.6, pr - 0.15); resize(); }
+    else if (frameAvg < 14 && pr < maxPR) { pr = Math.min(maxPR, pr + 0.1); resize(); }
+  }
   if (G.direct || (TEST && !params.has('post'))) renderer.render(scene, camera); else composer.render(rdt);
   input.endFrame();
+  G.bench.frame(raw, rdt);
   // perf
   frameAvg = frameAvg * 0.95 + (rdt * 1000) * 0.05; fpsAcc += rdt; fpsN++; adaptT += rdt;
   if (fpsAcc > 0.5) {
     const inf = renderer.info.render;
     fpsEl.textContent = `${Math.round(fpsN / fpsAcc)} fps  max ${spike.toFixed(0)}ms  pr ${pr.toFixed(2)}  p ${fx.add.n}/${fx.smoke.n}  rib ${fx.ribbons.filter(r => r.alive).length}  e ${enemies.list.length}  dc ${inf.calls}  tri ${(inf.triangles / 1000).toFixed(0)}k  vfx ${G.vfx.toFixed(2)}`;
     fpsAcc = 0; fpsN = 0; spike = 0;
-  }
-  if (adaptT > 1.5 && !TEST) {
-    adaptT = 0;
-    if (frameAvg > 20 && pr > 0.6) { pr = Math.max(0.6, pr - 0.15); resize(); }
-    else if (frameAvg < 14 && pr < maxPR) { pr = Math.min(maxPR, pr + 0.1); resize(); }
   }
 }
 requestAnimationFrame(frame);
@@ -327,8 +351,15 @@ function bot(dt: number) {
   input.simKey('KeyD', p.pos.x < tx - 3); input.simKey('KeyA', p.pos.x > tx + 3);
   input.simKey('ShiftLeft', G.director.tunnel.run || (botT % 9) < 1.2);
 }
+const BOT_KEYS = ['Mouse0', 'KeyE', 'Space', 'KeyF', 'KeyD', 'KeyA', 'ShiftLeft'];
+const bench = new Bench({
+  renderer, startShowcase, toTitle, pr: () => pr, particles: () => fx.add.n + fx.smoke.n, ribbons: () => fx.ribbons.filter(r => r.alive).length,
+  setBot: on => { BOT = on || params.has('bot'); if (!BOT) for (const k of BOT_KEYS) input.simKey(k, false); },
+});
+G.bench = bench;
 const scAuto = params.get('showcase');
-if (scAuto && SHOWCASES.includes(scAuto) && params.has('auto')) setTimeout(() => startShowcase(scAuto), 300);
+if (scAuto === 'benchmark' && params.has('auto')) setTimeout(() => bench.start(), 300);
+else if (scAuto && SHOWCASES.includes(scAuto) && params.has('auto')) setTimeout(() => startShowcase(scAuto), 300);
 else if (params.has('auto')) setTimeout(() => startMission(+(params.get('ch') || 0)), 300);
 (window as any).__game = { startMission, startShowcase, setPause, toTitle, t };
 export { setMusic };

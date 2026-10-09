@@ -57,7 +57,7 @@ export class Player {
   hp = 100; maxHp = 100; energy = 100; alive = true; deadT = 0; invuln = 0; regenDelay = 0;
   boosting = false; boostLock = false; boostT = 0; dodgeT = 0; dodgeDir = new THREE.Vector2(1, 0); dodgeCd = 0; roll = 0; rollTarget = 0;
   bonusT = 0; lastIx = 1;
-  meleeState = 'none'; meleeT = 0; meleeDur = 0.2; meleeFrom = new THREE.Vector3(); meleeTarget: Target | null = null; combo = 0; comboT = 0; meleeCd = 0;
+  meleeState = 'none'; meleeT = 0; meleeDur = 0.2; meleeFrom = new THREE.Vector3(); meleeTarget: Target | null = null; meleeFocus = new THREE.Vector3(); meleeCamT = 0; meleeSide = 1; combo = 0; comboT = 0; meleeCd = 0;
   fireT = 0; recoil = 0; missileReady = true; reloadT = 0; reloadMax = 2.4; locking = false; lockT = 0; maxLocks = 8;
   locks: { t: Target; age: number }[] = [];
   missiles: Missile[] = []; bolts: Bolts; ribbons: Ribbon[] = [];
@@ -77,7 +77,7 @@ export class Player {
     this.slashMat = new THREE.ShaderMaterial({
       uniforms: { uA: { value: 0 }, uC: { value: new THREE.Color(1.0, 2.6, 3.4) } },
       vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `uniform float uA; uniform vec3 uC; varying vec2 vUv; void main(){ float a = smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.75, vUv.y) * pow(vUv.x, 1.5); gl_FragColor = vec4(uC + vec3(2.0) * pow(vUv.x, 6.0), a * uA); }`,
+      fragmentShader: `uniform float uA; uniform vec3 uC; varying vec2 vUv; void main(){ float x = clamp(vUv.x, 0.0, 1.0); float a = smoothstep(0.0, 0.5, vUv.y) * smoothstep(1.0, 0.75, vUv.y) * pow(x, 1.5); gl_FragColor = vec4(uC + vec3(2.0) * pow(x, 6.0), a * uA); }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
     });
     const sg = new THREE.RingGeometry(2.5, 7, 32, 1, 0, Math.PI * 1.1);
@@ -162,12 +162,14 @@ export class Player {
   startMelee() {
     const t = this.findMeleeTarget(this.boosting ? 170 : 115);
     this.mech.blade.visible = true; this.meleeT = 0; sfx.melee();
+    if (t) { this.meleeFocus.copy(t.pos); this.meleeSide = t.pos.x >= this.pos.x ? -1 : 1; this.meleeCamT = 0.9; }
     if (t) { this.meleeState = 'lunge'; this.meleeTarget = t; this.meleeFrom.copy(this.pos); this.meleeDur = clamp(t.pos.distanceTo(this.pos) / 380, 0.1, 0.4); }
     else { this.meleeState = 'slash'; this.meleeTarget = null; this.doSlash(null); }
   }
   doSlash(t: Target | null) {
     this.meleeState = 'slash'; this.meleeT = 0; this.combo = this.comboT > 0 ? Math.min(3, this.combo + 1) : 1; this.comboT = 0.75;
     this.slash.visible = true; this.slashT = 0; this.slash.position.copy(this.pos).add(tmp.set(0, 0.5, -2));
+    if (t) { this.meleeFocus.copy(t.pos); this.meleeCamT = Math.max(this.meleeCamT, 0.55); }
     this.slash.rotation.set(-0.2, 0, [0.4, Math.PI - 0.6, -1.3][this.combo - 1] + rand(-0.2, 0.2)); this.slash.scale.setScalar(this.combo === 3 ? 1.6 : 1.1);
     const mult = this.bonusT > 0 ? 2 : 1;
     const hitList: Target[] = [];
@@ -175,15 +177,15 @@ export class Player {
     for (const o of G.targetList as Target[]) if (o.alive && o !== t && o.pos.distanceTo(this.pos) < o.radius + 9 && (o.lockable || o.kind === 'core')) hitList.push(o);
     if (hitList.length) {
       for (const o of hitList) o.hit((this.combo === 3 ? 160 : 75) * mult, tmp2.copy(o.pos).lerp(this.pos, 0.3), 'melee');
-      hitstop(this.combo === 3 ? 0.16 : 0.08); flash(0.3, 0.6, 1.5, 2); shake(this.combo === 3 ? 0.55 : 0.32);
-      fx.sparks(tmp2, 50, 70, 1.5, 3, 4); fx.ring(tmp2, 1, 16, 0.3, 0.6, 2, 3); fx.light(tmp2, 0x66ddff, 200, 0.25); sfx.slashHit();
+      hitstop(this.combo === 3 ? 0.16 : 0.08); flash(this.combo === 3 ? 0.22 : 0.12, 0.6, 1.5, 2); shake(this.combo === 3 ? 0.55 : 0.32);
+      fx.sparks(tmp2, 50, 70, 1.5, 3, 4); fx.ring(tmp2, 1, 9, 0.25, 0.6, 2, 3, true, 0.7); fx.light(tmp2, 0x66ddff, 90, 0.2); sfx.slashHit();
       for (let i = 0; i < 30; i++) { const a = rand(0, 6.28); fx.add.emit(tmp2.x, tmp2.y, tmp2.z, Math.cos(a) * 80, Math.sin(a) * 80, rand(-20, 20), 0.25, 0.3, 0.05, 2, 3.5, 4, 0.5, 1, 2, 1, 4, 0, 0.06, 0, 1); }
     }
   }
 
   update(dt: number) {
     const m = this.mech;
-    this.invuln -= dt; this.dodgeCd -= dt; this.comboT -= dt; this.bonusT -= dt; this.meleeCd -= dt; this.regenDelay -= dt;
+    this.invuln -= dt; this.meleeCamT -= dt; this.dodgeCd -= dt; this.comboT -= dt; this.bonusT -= dt; this.meleeCd -= dt; this.regenDelay -= dt;
     if (!this.alive) { this.deadT += G.realDt; return; }
     const ctl = !this.auto && !G.cinematic && G.state === 'playing';
     // ---- input / movement
@@ -224,9 +226,9 @@ export class Player {
       this.meleeT += dt; const t = this.meleeTarget;
       if (!t || !t.alive) { this.meleeState = 'return'; }
       else {
-        const u = easeOut(this.meleeT / this.meleeDur); tmp.copy(t.pos); tmp.z += t.radius + 2.5; tmp.y -= 0.5;
+        this.meleeFocus.copy(t.pos); const u = easeOut(this.meleeT / this.meleeDur); tmp.copy(t.pos); tmp.z += t.radius + 2.5; tmp.y -= 0.5;
         this.pos.lerpVectors(this.meleeFrom, tmp, u); this.invuln = Math.max(this.invuln, 0.1);
-        this.ghostT -= dt; if (this.ghostT <= 0) { this.ghost(0.45); this.ghostT = 0.03; }
+        this.ghostT -= dt; if (this.ghostT <= 0) { this.ghost(0.16); this.ghostT = 0.07; }
         for (let i = 0; i < 3; i++) fx.add.emit(this.pos.x + rand(-1, 1), this.pos.y + rand(-1, 1), this.pos.z, 0, 0, 120, 0.2, 0.5, 0.1, 0.5, 2, 3, 0.2, 0.5, 1.5, 1, 0, 0, 0.03, 0, 1);
         if (this.meleeT >= this.meleeDur) this.doSlash(t);
       }
@@ -357,7 +359,7 @@ export class Player {
       fx.later(i * 0.055, () => this.launchMissile(t, i));
     }
     if (n >= 6) G.hud.small('m_salvo', 'ok', { n });
-    shake(0.15);
+    sfx.salvo(n); shake(0.15);
   }
   launchMissile(t: Target | null, i: number) {
     const ms = this.missiles.find(x => !x.alive); if (!ms || !this.alive) return;

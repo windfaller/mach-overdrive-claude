@@ -183,8 +183,10 @@ class Debris {
         if (Math.random() < 0.3) fx.smoke.emit(this.P[i * 3], this.P[i * 3 + 1], this.P[i * 3 + 2], 0, 0, 0, 1.2, this.S[i] * 1.5, this.S[i] * 5, 0.09, 0.08, 0.08, 0.05, 0.05, 0.05, 0.5, 2, -3, 0, 0.9, 2);
       }
       this.e.set(this.R[i * 3], this.R[i * 3 + 1], this.R[i * 3 + 2]); this.q.setFromEuler(this.e);
-      const s = this.S[i] * Math.min(1, this.L[i] * 2);
-      this.tp.set(this.P[i * 3], this.P[i * 3 + 1], this.P[i * 3 + 2]); this.ts.set(s, s, s); this.m.compose(this.tp, this.q, this.ts);
+      this.tp.set(this.P[i * 3], this.P[i * 3 + 1], this.P[i * 3 + 2]);
+      // chunks drift back past the camera: shrink them away before one can fill the lens as a black frame
+      const cd = this.tp.distanceTo(G.camera.position);
+      const s = this.S[i] * Math.min(1, this.L[i] * 2) * Math.min(1, Math.max(0, (cd - 2) / 6)); this.ts.set(s, s, s); this.m.compose(this.tp, this.q, this.ts);
       this.mesh.setMatrixAt(i, this.m); i++;
     }
     this.mesh.count = this.n; this.mesh.instanceMatrix.needsUpdate = true;
@@ -250,6 +252,7 @@ class FX {
   ring(p: THREE.Vector3, s0: number, s1: number, life: number, r: number, g: number, b: number, face = true, a = 1) {
     let ring = this.rings.find(x => x.t >= x.life) || this.rings[0];
     ring.t = 0; ring.life = life; ring.s0 = s0; ring.s1 = s1; ring.face = face; ring.mesh.position.copy(p); ring.mesh.visible = true;
+    a *= Math.min(1, Math.max(0.2, (G.camera.position.distanceTo(p) - 4) / (s1 * 2.5))); // a shockwave that would fill the screen fades instead
     ring.mat.uniforms.uC.value.setRGB(r * a, g * a, b * a); ring.mesh.rotation.set(face ? 0 : -Math.PI / 2, 0, 0);
   }
   sparks(p: THREE.Vector3, n: number, spd: number, r = 3, g = 2, b = 1, dir?: THREE.Vector3) {
@@ -267,7 +270,9 @@ class FX {
   explosion(p: THREE.Vector3, s = 1, vel?: THREE.Vector3, opts: { color?: number[]; debris?: number; sound?: boolean; ring?: boolean } = {}) {
     const vx = vel ? vel.x : 0, vy = vel ? vel.y : 0, vz = vel ? vel.z : 0;
     const c = opts.color || [3, 1.4, 0.45];
-    const fa = 1 / (1 + 0.25 * s);
+    // close-to-camera blasts (blade kills) are dimmed so the hit stays readable instead of whiting out the frame
+    const near = Math.min(1, Math.max(0.3, (G.camera.position.distanceTo(p) - 6) / (40 * Math.sqrt(s))));
+    const fa = near / (1 + 0.25 * s);
     this.add.emit(p.x, p.y, p.z, vx, vy, vz, 0.2, 5 * s, 12 * s, 2.6, 2, 1.4, c[0], c[1], c[2], fa, 1, 0, 0, 0, 1);
     const nf = Math.min(40, Math.floor(10 + 10 * s));
     for (let i = 0; i < nf; i++) {
@@ -281,7 +286,7 @@ class FX {
       this.smoke.emit(p.x + rand(-2, 2) * s, p.y + rand(-2, 2) * s, p.z + rand(-2, 2) * s, vx * 0.5 + rand(-6, 6) * s, vy * 0.5 + rand(0, 8), vz * 0.5 + rand(-6, 6) * s,
         rand(1.6, 2.8), rand(3, 5) * s, rand(9, 14) * s, 0.16, 0.13, 0.13, 0.05, 0.05, 0.06, 0.55, 2, -2, 0, 0.7, 2);
     }
-    if (opts.ring !== false) this.ring(p, 1 * s, 22 * s, 0.45, 1.6, 0.9, 0.5, true, fa + 0.2);
+    if (opts.ring !== false) this.ring(p, 1 * s, 22 * s, 0.45, 1.6, 0.9, 0.5, true, fa + 0.2 * near);
     const nd = opts.debris !== undefined ? opts.debris : Math.floor(3 * s);
     for (let i = 0; i < nd; i++) this.debris.spawn(p.x, p.y, p.z, vx + rand(-30, 30) * Math.sqrt(s), vy + rand(-10, 40), vz + rand(-30, 30), rand(0.2, 0.6) * Math.sqrt(s), Math.random() < 0.5);
     this.light(p, 0xff9050, 120 * s, 0.3 + 0.1 * s);
