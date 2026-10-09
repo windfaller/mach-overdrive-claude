@@ -109,15 +109,16 @@ if (which === 'all' || which === 'ui') {
   };
   const { page, errs } = await open('test', padInit);
   await page.waitForFunction(() => window.__G && window.__G.state === 'title', null, { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(1500);
-  const tap = async i => { await page.evaluate(i => window.__press(i, true), i); await page.waitForTimeout(450); await page.evaluate(i => window.__press(i, false), i); await page.waitForTimeout(450); };
+  // hold the button until the game reacts (slow CI frames can be longer than any fixed tap), then release
+  const tap = async (i, done) => { await page.evaluate(i => window.__press(i, true), i); if (done) await until(done); else await page.waitForTimeout(450); await page.evaluate(i => window.__press(i, false), i); await page.waitForTimeout(450); };
   const until = (fn, ms = 15000) => page.waitForFunction(fn, null, { timeout: ms, polling: 100 }).catch(() => {});
-  await tap(0); await until(() => window.__G.state === 'playing');
+  await tap(0, () => window.__G.state === 'playing');
   let s = await probe(page); if (s.st !== 'playing') fail('pad start', JSON.stringify(s)); else log('  ✓ gamepad A starts from title');
   await page.evaluate(() => { window.__pad.axes[0] = 1; }); await page.waitForTimeout(800);
   const x = await page.evaluate(() => window.__G.player.pos.x); await page.evaluate(() => { window.__pad.axes[0] = 0; });
   if (!(x > 3)) fail('pad stick', 'player x ' + x); else log('  ✓ left stick moves the mech');
-  await tap(9); await until(() => window.__G.paused); s = await probe(page); if (!s.paused) fail('pad pause', JSON.stringify(s)); else log('  ✓ Start pauses');
-  await tap(9); await until(() => !window.__G.paused); s = await probe(page); if (s.paused) fail('pad resume', JSON.stringify(s)); else log('  ✓ Start resumes');
+  await tap(9, () => window.__G.paused); s = await probe(page); if (!s.paused) fail('pad pause', JSON.stringify(s)); else log('  ✓ Start pauses');
+  await tap(9, () => !window.__G.paused); s = await probe(page); if (s.paused) fail('pad resume', JSON.stringify(s)); else log('  ✓ Start resumes');
   if (errs.length) fail('ui', errs.join(' | '));
   await page.close();
   for (const [lang, word] of [['zh', '出擊'], ['ja', '出撃'], ['en', 'LAUNCH']]) {
