@@ -63,7 +63,7 @@ if (which === 'all' || which === 'chapters') {
   }
   // boss to victory, then restart
   if (!only || only.includes(4)) {
-  const r = await chapter(4, s => s.st === 'victory', 480);
+  const r = await chapter(4, s => s.st === 'victory', 640);
   if (r.ok) {
     await r.page.click('#againBtn'); await r.page.waitForTimeout(1500);
     const s = await probe(r.page);
