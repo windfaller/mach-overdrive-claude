@@ -57,7 +57,7 @@ async function chapter(ch, until, maxSec) {
 if (which === 'all' || which === 'chapters') {
   log('chapters');
   const only = process.env.CH ? process.env.CH.split(',').map(Number) : null;
-  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 300], [1, s => s.ck >= 2, 420], [2, s => s.ck >= 3, 360], [3, s => s.boss !== 'off', 400]]) {
+  for (const [ch, goal, max] of [[0, s => s.ck >= 1, 300], [1, s => s.ck >= 2, 420], [2, s => s.ck >= 3, 480], [3, s => s.boss !== 'off', 400]]) {
     if (only && !only.includes(ch)) continue;
     const r = await chapter(ch, goal, max); await r.page.close();
   }
