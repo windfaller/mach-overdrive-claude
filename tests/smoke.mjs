@@ -323,7 +323,7 @@ if (which === 'all' || which === 'bench') {
     if (r.scenes.length !== 9 || !(r.overall.frames > 0)) fail('benchmark', 'incomplete ' + JSON.stringify(r.overall));
     else if (r.software && r.verdict === 'PASS') fail('benchmark', 'software renderer marked PASS');
     else if (!panel.includes(r.verdict) || !panel.includes('COPY JSON')) fail('benchmark', 'panel missing');
-    else log(`  ✓ benchmark ran 8 scenes, verdict ${r.verdict}${r.software ? ' (software renderer detected)' : ''}`);
+    else log(`  ✓ benchmark ran 9 scenes, verdict ${r.verdict}${r.software ? ' (software renderer detected)' : ''}`);
   }
   if (errs.length) fail('benchmark', errs.slice(0, 3).join(' | '));
   await page.close();
