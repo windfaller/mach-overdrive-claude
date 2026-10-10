@@ -76,7 +76,7 @@ if (which === 'all' || which === 'chapters') {
   const d = await open('auto&ch=1&test');
   await d.page.waitForFunction(() => window.__G && window.__G.state === 'playing' && window.__G.missionTime > 0.5, null, { timeout: 30000 });
   await d.page.evaluate(() => { const p = window.__G.player; p.invuln = 0; p.damage(999); });
-  await d.page.waitForFunction(() => window.__G.state === 'dead', null, { timeout: 30000 }).catch(() => {});
+  await d.page.waitForFunction(() => window.__G.state === 'dead', null, { timeout: 90000 }).catch(() => {});
   let s = await probe(d.page);
   if (s.st !== 'dead') fail('game over', JSON.stringify(s));
   else { await d.page.click('#retryBtn'); await d.page.waitForTimeout(1200); s = await probe(d.page); if (s.st !== 'playing' || s.ck !== 1) fail('retry', JSON.stringify(s)); else log('  ✓ game over -> retry checkpoint'); }
@@ -87,7 +87,7 @@ if (which === 'all' || which === 'chapters') {
 
 if (which === 'all' || which === 'showcase') {
   log('showcase routes');
-  for (const sc of ['missile', 'blade', 'raven', 'fleet', 'tunnel', 'boss', 'transform', 'finisher']) {
+  for (const sc of ['missile', 'blade', 'beam', 'raven', 'fleet', 'tunnel', 'boss', 'transform', 'finisher']) {
     const { page, errs } = await open(`showcase=${sc}&auto&test&bot`);
     if (sc === 'finisher') await page.waitForFunction(() => ['finisher', 'dead'].includes(window.__G.boss.state) || window.__G.state === 'victory', null, { timeout: 90000, polling: 500 }).catch(() => {});
     else await page.waitForTimeout(sc === 'transform' ? 16000 : 7000);
@@ -121,6 +121,107 @@ if (which === 'all' || which === 'ui') {
   await tap(9, () => !window.__G.paused); s = await probe(page); if (s.paused) fail('pad resume', JSON.stringify(s)); else log('  ✓ Start resumes');
   if (errs.length) fail('ui', errs.join(' | '));
   await page.close();
+  // heavy beam: hold Q to full charge, release, and it must fire and pierce
+  {
+    const { page, errs } = await open('auto&ch=1&god&test');
+    await page.waitForFunction(() => window.__G && window.__G.state === 'playing' && window.__G.enemies.list.some(e => e.alive), null, { timeout: 60000, polling: 200 }).catch(() => {});
+    await page.keyboard.down('q');
+    await page.waitForFunction(() => window.__G.player.charge >= window.__G.player.chargeMax, null, { timeout: 30000, polling: 50 }).catch(() => {});
+    const full = await page.evaluate(() => ({ c: window.__G.player.charge, arc: document.getElementById('chgArc').getAttribute('opacity') }));
+    await page.keyboard.up('q'); await page.waitForTimeout(600);
+    const r = await page.evaluate(() => ({ shots: window.__G.player.beamShots, cd: window.__G.player.beamCd, charging: window.__G.player.charging }));
+    if (!(full.c >= 2) || full.arc !== '1') fail('beam charge', JSON.stringify(full));
+    else if (r.shots !== 1 || r.charging || !(r.cd > 0)) fail('beam fire', JSON.stringify(r));
+    else log('  ✓ heavy beam charges to full and fires on release');
+    // a tap shorter than the 0.3 s minimum must not fire
+    await page.evaluate(() => { window.__G.player.beamCd = 0; window.__G.input.simKey('KeyQ', true); });
+    await page.waitForTimeout(60); await page.evaluate(() => window.__G.input.simKey('KeyQ', false)); await page.waitForTimeout(400);
+    const tap = await page.evaluate(() => window.__G.player.beamShots);
+    if (tap !== 1) fail('beam tap', 'short tap fired, shots ' + tap); else log('  ✓ a short tap does not fire the beam');
+    if (errs.length) fail('beam', errs.slice(0, 3).join(' | '));
+    await page.close();
+  }
+  // touch: tap LAUNCH, then drive the stick, fire button, drag-aim and pause with real multi-touch events
+  {
+    const ctx = await browser.newContext({ viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true, deviceScaleFactor: 1 });
+    const page = await ctx.newPage(); const errs = [];
+    page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); }); page.on('pageerror', e => errs.push('PAGEERROR ' + e.message));
+    await page.goto(url + '?test&god');
+    await page.waitForFunction(() => window.__G && window.__G.state === 'title', null, { timeout: 30000 }).catch(() => {}); await page.waitForTimeout(800);
+    const cdp = await ctx.newCDPSession(page);
+    const touch = (type, pts) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: pts.map(([x, y, id]) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) });
+    const until = (fn, ms = 15000) => page.waitForFunction(fn, null, { timeout: ms, polling: 100 }).catch(() => {});
+    await page.tap('#startBtn');
+    await until(() => window.__G.state === 'playing' && document.getElementById('touch').classList.contains('on'));
+    const st = await page.evaluate(() => ({ st: window.__G.state, on: document.getElementById('touch').classList.contains('on'), dev: document.body.classList.contains('touchdev') }));
+    if (st.st !== 'playing' || !st.on || !st.dev) fail('touch start', JSON.stringify(st)); else log('  ✓ tapping LAUNCH starts with the touch overlay');
+    await page.waitForTimeout(1500);
+    // left thumb: stick to the right; right thumb: hold FIRE at the same time
+    const fireBox = await page.locator('#touch .t-fire').boundingBox(); const fx = fireBox.x + fireBox.width / 2, fy = fireBox.y + fireBox.height / 2;
+    const x0 = await page.evaluate(() => window.__G.player.pos.x);
+    await touch('touchStart', [[150, 300, 1]]);
+    for (let k = 1; k <= 6; k++) await touch('touchMove', [[150 + k * 15, 300, 1]]);
+    await touch('touchStart', [[240, 300, 1], [fx, fy, 2]]);
+    await until(() => window.__G.player.pos.x > 3, 8000);
+    const mv = await page.evaluate(() => ({ x: window.__G.player.pos.x, sx: window.__G.input.touchStick.x, firing: window.__G.input.isDown('fire') }));
+    await touch('touchEnd', []);
+    await page.waitForTimeout(300);
+    const rel = await page.evaluate(() => ({ sx: window.__G.input.touchStick.x, firing: window.__G.input.isDown('fire') }));
+    if (!(mv.x > x0 + 3) || !(mv.sx > 0.5) || !mv.firing) fail('touch stick+fire', JSON.stringify({ x0, mv }));
+    else if (rel.sx !== 0 || rel.firing) fail('touch release', JSON.stringify(rel));
+    else log('  ✓ stick moves the mech while FIRE is held (two fingers), both release cleanly');
+    // drag-aim on the right half moves the reticle
+    const m0 = await page.evaluate(() => ({ x: window.__G.input.mouse.x, y: window.__G.input.mouse.y }));
+    await touch('touchStart', [[560, 120, 3]]); for (let k = 1; k <= 5; k++) await touch('touchMove', [[560 - k * 12, 120 + k * 6, 3]]); await touch('touchEnd', []);
+    const m1 = await page.evaluate(() => ({ x: window.__G.input.mouse.x, y: window.__G.input.mouse.y }));
+    if (!(m1.x < m0.x - 30)) fail('touch aim', JSON.stringify({ m0, m1 })); else log('  ✓ drag on the right moves the aim');
+    // pause button
+    const pb = await page.locator('#touch .tpause').boundingBox();
+    await touch('touchStart', [[pb.x + pb.width / 2, pb.y + pb.height / 2, 4]]); await until(() => window.__G.paused, 5000); await touch('touchEnd', []);
+    const ps = await page.evaluate(() => ({ p: window.__G.paused, on: document.getElementById('touch').classList.contains('on') }));
+    if (!ps.p || ps.on) fail('touch pause', JSON.stringify(ps)); else log('  ✓ pause button pauses and hides the overlay');
+    await page.tap('#resumeBtn'); await until(() => !window.__G.paused, 5000);
+    if (await page.evaluate(() => window.__G.paused)) fail('touch resume', 'still paused'); else log('  ✓ resume by tapping the menu');
+    if (errs.length) fail('touch', errs.slice(0, 3).join(' | '));
+    await ctx.close();
+  }
+  // shield absorbs before armor; death is a short tumble before the blast; comms + chapter card play
+  {
+    const { page, errs } = await open('auto&ch=0&test');
+    await page.waitForFunction(() => window.__G && window.__G.state === 'playing' && window.__G.missionTime > 3, null, { timeout: 60000, polling: 200 }).catch(() => {});
+    const r = await page.evaluate(() => { const p = window.__G.player; const out = {};
+      p.invuln = 0; p.damage(30); out.a = [p.shield, p.hp];
+      p.invuln = 0; p.damage(50); out.b = [p.shield, p.hp];
+      out.comms = window.__G.comms.shown; return out; });
+    if (r.a[0] !== 30 || r.a[1] !== 100 || r.b[0] !== 0 || r.b[1] !== 80) fail('shield', JSON.stringify(r)); else log('  ✓ shield absorbs first, then armor');
+    if (!(r.comms >= 1)) fail('comms', 'no radio line by 3 s: ' + r.comms); else log('  ✓ radio comms play in chapter 1');
+    await page.evaluate(() => { const p = window.__G.player; p.invuln = 0; p.damage(999); });
+    const dying = await page.evaluate(() => ({ dying: window.__G.player.dying > 0, alive: window.__G.player.alive, vis: window.__G.player.root.visible }));
+    await page.waitForFunction(() => window.__G.state === 'dead', null, { timeout: 90000 }).catch(() => {});
+    const st = await page.evaluate(() => window.__G.state);
+    if (!dying.dying || !dying.alive || !dying.vis || st !== 'dead') fail('death tumble', JSON.stringify({ dying, st })); else log('  ✓ death tumbles, then explodes into game over');
+    if (errs.length) fail('systems', errs.slice(0, 3).join(' | '));
+    await page.close();
+  }
+  // HELIOS: the deflector shields the other two weak points; killing a system node changes the boss
+  {
+    const { page, errs } = await open('auto&ch=4&god&test');
+    await page.waitForFunction(() => window.__G && window.__G.boss.state === 'p1', null, { timeout: 120000, polling: 250 }).catch(() => {});
+    const r = await page.evaluate(() => { const B = window.__G.boss, [port, star, spire] = B.weak, out = {};
+      out.state = B.state; out.shielded = [B.shielded(port), B.shielded(star), B.shielded(spire)];
+      const h0 = port.hp; port.hit(100, port.pos.clone(), 'laser'); out.halfDmg = h0 - port.hp;
+      star.hit(star.hp + 1, star.pos.clone(), 'missile'); out.after = [B.shielded(port), B.shielded(spire)];
+      spire.hit(spire.hp + 1, spire.pos.clone(), 'missile'); B.atk = ''; B.idleT = 0; B.atkIdx = 1; B.update(0.016); out.atk = B.atk; out.state2 = B.state;
+      return out; });
+    if (r.state !== 'p1') fail('helios systems', 'boss never reached p1 ' + JSON.stringify(r));
+    else if (JSON.stringify(r.shielded) !== '[true,false,true]' || r.halfDmg !== 50) fail('helios deflector', JSON.stringify(r));
+    else if (r.after.some(Boolean)) fail('helios deflector down', JSON.stringify(r));
+    else if (r.atk === 'sweep') fail('helios beam node', 'sweep still scheduled with the emitter destroyed');
+    else if (r.state2 !== 'p1' || !r.atk) fail('helios after nodes', JSON.stringify(r));
+    else log(`  ✓ HELIOS deflector shields the arrays (50% dmg); destroying nodes drops the shield and the sweep beam (next: ${r.atk})`);
+    if (errs.length) fail('helios', errs.slice(0, 3).join(' | '));
+    await page.close();
+  }
   for (const [lang, word] of [['zh', '出擊'], ['ja', '出撃'], ['en', 'LAUNCH']]) {
     const o = await open('lang=' + lang); await o.page.waitForTimeout(500);
     const txt = await o.page.textContent('#startBtn'); if (txt.trim() !== word) fail('lang ' + lang, txt); else log(`  ✓ lang=${lang} -> ${word}`);

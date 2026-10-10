@@ -5,7 +5,7 @@ import * as THREE from 'three';
  * times. Meant for a real GPU: a software rasterizer (SwiftShader / llvmpipe) is detected and never passes.
  * &benchsec=N scales every scene to N seconds (used by the smoke test).
  */
-const SCENES: [string, number][] = [['missile', 10], ['blade', 10], ['raven', 12], ['fleet', 10], ['tunnel', 10], ['boss', 9], ['transform', 10], ['finisher', 13]];
+const SCENES: [string, number][] = [['missile', 10], ['blade', 10], ['beam', 10], ['raven', 12], ['fleet', 10], ['tunnel', 10], ['boss', 9], ['transform', 10], ['finisher', 13]];
 const WARM = 0.6; // seconds skipped at the start of each scene (scene setup, first-use uploads)
 
 interface SceneStats { scene: string; seconds: number; frames: number; avgMs: number; p95Ms: number; p99Ms: number; worstMs: number; spikes33: number;

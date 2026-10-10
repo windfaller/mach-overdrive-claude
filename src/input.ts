@@ -7,11 +7,16 @@ const released = new Set<string>();
 export const mouse = { x: 0, y: 0, locked: false };
 /** analog sticks after deadzone, plus aim-assist friction set by the player each frame */
 export const pad = { connected: false, lx: 0, ly: 0, rx: 0, ry: 0, friction: 1 };
+/** virtual stick from the touch overlay (src/touch.ts), same convention as the gamepad left stick */
+export const touchStick = { x: 0, y: 0, aiming: false };
+let lastTouch = -1e9;
+/** the touch overlay calls this on every touch so synthesized mouse events don't steal the device back */
+export const markTouch = () => { lastTouch = performance.now(); };
 let lockLostCb: (() => void) | null = null;
 export const onLockLost = (f: () => void) => { lockLostCb = f; };
 
-function press(c: string) { if (!down.has(c)) pressed.add(c); down.add(c); }
-function release(c: string) { if (down.has(c)) released.add(c); down.delete(c); }
+export function press(c: string) { if (!down.has(c)) pressed.add(c); down.add(c); }
+export function release(c: string) { if (down.has(c)) released.add(c); down.delete(c); }
 
 export function initInput(_canvas: HTMLElement) {
   mouse.x = innerWidth / 2; mouse.y = innerHeight / 2;
@@ -21,10 +26,11 @@ export function initInput(_canvas: HTMLElement) {
   });
   addEventListener('keyup', e => release(e.code));
   addEventListener('blur', () => { for (const c of [...down]) release(c); });
-  addEventListener('mousedown', e => { press('Mouse' + e.button); setDevice('kb'); });
+  addEventListener('mousedown', e => { if (device === 'touch' && performance.now() - lastTouch < 800) return; press('Mouse' + e.button); setDevice('kb'); });
   addEventListener('mouseup', e => release('Mouse' + e.button));
   addEventListener('contextmenu', e => e.preventDefault());
   addEventListener('mousemove', e => {
+    if (performance.now() - lastTouch < 800) return;
     if (document.pointerLockElement) {
       mouse.x = clamp(mouse.x + e.movementX, 20, innerWidth - 20);
       mouse.y = clamp(mouse.y + e.movementY, 20, innerHeight - 20);
@@ -37,18 +43,19 @@ export function initInput(_canvas: HTMLElement) {
   });
 }
 export function requestLock(el: HTMLElement) {
-  if (device === 'pad') return;
+  if (device !== 'kb') return;
   try { const p: any = el.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* iframe may block */ }
 }
 const map: Record<string, string[]> = {
-  fire: ['Mouse0', 'KeyJ', 'PadRT'],
-  lock: ['Mouse2', 'KeyE', 'KeyK', 'PadLT'],
-  boost: ['ShiftLeft', 'ShiftRight', 'PadLB', 'PadL3'],
-  dodge: ['Space', 'PadA'],
-  melee: ['KeyF', 'Mouse1', 'KeyL', 'PadX', 'PadRB'],
+  fire: ['Mouse0', 'KeyJ', 'PadRT', 'TouchFire'],
+  lock: ['Mouse2', 'KeyE', 'KeyK', 'PadLT', 'TouchLock'],
+  charge: ['KeyQ', 'KeyI', 'PadY', 'TouchBeam'],
+  boost: ['ShiftLeft', 'ShiftRight', 'PadLB', 'PadL3', 'TouchBoost'],
+  dodge: ['Space', 'PadA', 'TouchDodge'],
+  melee: ['KeyF', 'Mouse1', 'KeyL', 'PadX', 'PadRB', 'TouchMelee'],
   left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
   up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'],
-  pause: ['KeyP', 'Escape', 'PadStart'],
+  pause: ['KeyP', 'Escape', 'PadStart', 'TouchPause'],
   mUp: ['ArrowUp', 'KeyW', 'PadUp', 'PadLUp'], mDown: ['ArrowDown', 'KeyS', 'PadDown', 'PadLDown'],
   mLeft: ['ArrowLeft', 'PadLeft', 'PadLLeft'], mRight: ['ArrowRight', 'PadRight', 'PadLRight'],
   confirm: ['Enter', 'PadA', 'PadStart'], back: ['PadB'],
@@ -64,7 +71,7 @@ export function simKey(code: string, on: boolean) { if (on) press(code); else re
 /** Combined keyboard + left stick movement, each axis in [-1, 1]. */
 export function moveAxis() {
   const kx = (isDown('right') ? 1 : 0) - (isDown('left') ? 1 : 0), ky = (isDown('up') ? 1 : 0) - (isDown('down') ? 1 : 0);
-  return { x: clamp(kx + pad.lx, -1, 1), y: clamp(ky - pad.ly, -1, 1) };
+  return { x: clamp(kx + pad.lx + touchStick.x, -1, 1), y: clamp(ky - pad.ly - touchStick.y, -1, 1) };
 }
 
 // ---------------- gamepad ----------------
