@@ -38,16 +38,18 @@ Menus work with mouse, arrow keys + Enter, or D-pad + A. M mutes. Languages: EN 
 `npx playwright install chromium` once (Playwright is a pinned devDependency), then `npm run build && npm run smoke`. It drives each chapter with the bot and checks chapter progression, boss victory, restart, game over → retry, every showcase route, gamepad start / move / pause, language switching, the benchmark run, and authored GLTF fixtures (`tests/fixtures`) keeping banking, blade, Raven and HELIOS motion. It fails on console errors, NaN transforms, particle overflow, enemy runaway or dead targets left locked. `npm run smoke -- chapters|showcase|ui|bench|hero` runs one group; `CH=0,1,9` limits chapters (9 = game over). `node tests/shots.mjs <dir> combat,raven,blade,melee` saves full-quality screenshots.
 
 ## Hero assets (GLTF)
-The player mech and RAVEN ship as authored GLBs (`src/hero/*.glb`, inlined into the single-file build). They are remasters of the procedural blockout made in Blender: every plate is rebuilt with bevelled edges and weighted normals, and the armor gets tiling panel-line normal and roughness maps. Rebuild them with:
+The player mech, RAVEN and HELIOS ship as authored GLBs (`src/hero/*.glb`, inlined into the single-file build). They are remasters of the procedural blockout made in Blender: every plate is rebuilt with bevelled edges and weighted normals, and the armor gets tiling panel-line normal and roughness maps. Rebuild them with:
 
 ```
 npx esbuild tools/dump-rig.ts --bundle --platform=node --format=esm --outfile=/tmp/dump.mjs && node /tmp/dump.mjs player /tmp/player.json && node /tmp/dump.mjs raven /tmp/raven.json
 pip install bpy   # Blender as a Python module
 python tools/remaster_mech.py /tmp/player.json src/hero/player.glb player
 python tools/remaster_mech.py /tmp/raven.json src/hero/raven.glb raven
+npx esbuild tools/dump-helios.ts --bundle --platform=node --format=esm --loader:.glb=empty --outfile=/tmp/dumph.mjs && node /tmp/dumph.mjs /tmp/helios.json
+python tools/remaster_mech.py /tmp/helios.json src/hero/helios.glb helios
 ```
 
-HELIOS is still procedural. The brief for final art is in [docs/ASSET_BRIEF.md](docs/ASSET_BRIEF.md).
+HELIOS modules are remastered in module space (their nodes carry a `local` extra), so they ride the procedural ship-to-mech transformation unchanged. The brief for final art is in [docs/ASSET_BRIEF.md](docs/ASSET_BRIEF.md).
 
 Procedural models remain the fallback. Override per run with `?hero=player:assets/player.glb,raven:assets/raven.glb,helios:assets/helios.glb`, or force the blockouts with `?hero=none`. A missing or broken file logs a warning and keeps the procedural model.
 

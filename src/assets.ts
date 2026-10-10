@@ -4,6 +4,7 @@ import type { Mech } from './models';
 // authored hero meshes (remastered in Blender by tools/remaster_mech.py), inlined into the single-file build
 import playerGlb from './hero/player.glb?url';
 import ravenGlb from './hero/raven.glb?url';
+import heliosGlb from './hero/helios.glb?url';
 import { loadSamples } from './audio';
 
 /**
@@ -11,7 +12,7 @@ import { loadSamples } from './audio';
  * Drop authored files in /public/assets and point at them here, or override per run with
  * ?hero=player:assets/player.glb,raven:assets/raven.glb,helios:assets/helios.glb
  */
-export const HERO_ASSETS: { player?: string; raven?: string; helios?: string } = { player: playerGlb, raven: ravenGlb };
+export const HERO_ASSETS: { player?: string; raven?: string; helios?: string } = { player: playerGlb, raven: ravenGlb, helios: heliosGlb };
 /** Optional wav/ogg replacements keyed by sfx name (laser, missile, lockTick, locked, melee, slashHit, boost, perfect, ...). */
 export const AUDIO_ASSETS: Record<string, string> = {};
 
@@ -72,7 +73,10 @@ export function mapHelios(mods: Record<string, { g: THREE.Group }>, anchors: { w
   for (const [slot, name] of Object.entries(HELIOS_SLOTS)) {
     const node = find(src, name); const m = mods[slot]; if (!node || !m) continue;
     for (const c of m.g.children) if (c.userData.proc) c.visible = false;
-    m.g.attach(node); used++;
+    // remastered modules (tools/dump-helios.ts) are authored in module space; anything else in ship space
+    if (node.userData.local) { node.removeFromParent(); node.position.set(0, 0, 0); node.quaternion.identity(); node.scale.set(1, 1, 1); m.g.add(node); }
+    else m.g.attach(node);
+    used++;
   }
   const wk = [HELIOS_ANCHORS.weak0, HELIOS_ANCHORS.weak1, HELIOS_ANCHORS.weak2];
   wk.forEach((n, i) => { const a = find(src, n) || find(root, n); const t = anchors.weak[i]; if (a && t && t.parent) t.position.copy(t.parent.worldToLocal(a.getWorldPosition(new THREE.Vector3()))); });
@@ -102,7 +106,7 @@ export async function loadHeroAssets(ctx: { player: any; enemies: any; boss: any
       if (k === 'player') ctx.player.applyHeroModel(g.scene);
       else if (k === 'raven') ctx.enemies.applyRavenModel(g.scene);
       else if (k === 'helios') ctx.boss.applyHeroModel(g.scene, g.animations);
-      console.info(`[hero] ${k} loaded from ${list[k]}`);
+      console.info(`[hero] ${k} loaded from ${list[k].startsWith('data:') ? 'bundle' : list[k]}`);
     } catch (e) { console.warn(`[hero] ${k} failed, keeping procedural model`, e); }
   }));
 }

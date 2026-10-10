@@ -51,7 +51,7 @@ export class Boss {
   coreMesh!: THREE.Mesh; blade!: THREE.Group; beam: THREE.Mesh; beamCore: THREE.Mesh; tele: THREE.Mesh; arc: THREE.Mesh; arcMat: THREE.ShaderMaterial;
   lurch = 0; lurchSide = 1; bubbles: THREE.Mesh[] = []; bubbleMat!: THREE.ShaderMaterial; shieldPingT = 0;
   beamFrom = new THREE.Vector3(); beamTo = new THREE.Vector3(); beamOn = false; beamR = 4; sweep: any = {}; slashD: any = {}; prevFT = 0; fin: any = {};
-  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D(); arcs: Arcs; arcPts: THREE.Vector3[] = []; mixer: THREE.AnimationMixer | null = null; morphAction: THREE.AnimationAction | null = null;
+  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D(); arcs: Arcs; arcPts: THREE.Vector3[] = []; mixer: THREE.AnimationMixer | null = null; heroMats: THREE.MeshStandardMaterial[] = []; morphAction: THREE.AnimationAction | null = null;
 
   constructor(scene: THREE.Scene) {
     this.root.scale.setScalar(SC); this.root.visible = false; scene.add(this.root); this.arcs = new Arcs(scene);
@@ -168,6 +168,8 @@ export class Boss {
   get targets(): Target[] { return this.state === 'off' ? [] : this.parts.concat(this.armorPts); }
   /** Authored HELIOS: modules ride the procedural transform; an optional 'transform' clip replaces it. */
   applyHeroModel(src: THREE.Object3D, clips: THREE.AnimationClip[] = []) {
+    // authored glow strips take the shared glow material so power-up / damage pulses still drive them
+    src.traverse((o: any) => { if (!o.isMesh) return; if (/glow/i.test(o.material.name)) o.material = gMat; else this.heroMats.push(o.material); });
     const n = mapHelios(this.mods as any, { weak: this.weak.map(w => w.anchor), core: this.coreMesh }, src, this.root);
     const clip = clips.find(c => /transform/i.test(c.name));
     if (clip) { this.mixer = new THREE.AnimationMixer(this.root); this.morphAction = this.mixer.clipAction(clip); this.morphAction.play(); this.morphAction.paused = true; }
@@ -270,6 +272,7 @@ export class Boss {
     if (this.state === 'off') return;
     this.t += dt; const P = G.player.pos;
     bodyMat.emissive.multiplyScalar(Math.exp(-12 * dt));
+    for (const m of this.heroMats) m.emissive.copy(bodyMat.emissive);
     if (this.exposedT > 0) this.exposedT -= dt;
     const r = this.root;
     if (this.state === 'intro') this.intro(dt);

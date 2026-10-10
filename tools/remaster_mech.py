@@ -5,7 +5,10 @@ Each primitive is rebuilt with bevelled edges and weighted normals so plates cat
 and the armor gets tiling panel-line / wear maps generated here. Node names follow docs/ASSET_BRIEF.md, so the
 game's loader re-homes the parts onto the procedural rig and all gameplay animation keeps working.
 
-usage: python tools/remaster_mech.py <rig.json> <out.glb> [player|raven]
+HELIOS dumps (tools/dump-helios.ts) are per-module and in module space; their slot nodes carry a `local` extra so
+the loader parents them in place instead of preserving world position.
+
+usage: python tools/remaster_mech.py <rig.json> <out.glb> [player|raven|helios]
 """
 import sys, json, math, random
 import numpy as np
@@ -87,7 +90,13 @@ def pbr(name, base, metal, rough, detail=True):
         nt.links.new(sep.outputs['Green'], b.inputs['Roughness']); nt.links.new(sep.outputs['Blue'], b.inputs['Metallic'])
     return m
 
-if variant == 'raven':
+# per variant: bevel width and panel tiling follow the model's size (HELIOS is ~30x a player mech)
+BEVEL, UVS = (0.22, 0.11) if variant == 'helios' else (0.018, 0.55)
+if variant == 'helios':
+    MATS = { 'dark': pbr('helios_hull', hexrgb(0x1a181f), 0.85, 0.4), 'mid': pbr('helios_plate', hexrgb(0x4a4450), 0.8, 0.36),
+             'light': pbr('helios_trim', hexrgb(0x8a7f78), 0.6, 0.4) }
+    GLOW = (1.0, 0.28, 0.09)
+elif variant == 'raven':
     MATS = { 'dark': pbr('raven_dark', hexrgb(0x2a2226), 0.85, 0.32), 'mid': pbr('raven_mid', hexrgb(0x6a2a34), 0.7, 0.38),
              'light': pbr('raven_light', hexrgb(0x7a5a4c), 0.6, 0.4) }
     GLOW = (1.0, 0.08, 0.25)
@@ -101,7 +110,7 @@ bb.inputs['Emission Color'].default_value = (*GLOW, 1); bb.inputs['Emission Stre
 MATS['glow'] = gm; MATS['other'] = MATS['mid']
 
 # ---------------- geometry ----------------
-def triplanar_uv(bm, scale=0.55):
+def triplanar_uv(bm, scale):
     uv = bm.loops.layers.uv.verify()
     for f in bm.faces:
         n = f.normal; ax = max(range(3), key=lambda i: abs(n[i]))
@@ -129,8 +138,8 @@ def build(name, tris, mat_key):
     if mat_key != 'glow':
         # bevel only the hard edges (box corners, cylinder caps), sized to the thinnest plate dimension
         hard = [e for e in bm.edges if len(e.link_faces) == 2 and e.calc_face_angle(0) > math.radians(50)]
-        if hard: bmesh.ops.bevel(bm, geom=hard, offset=0.018, segments=2, profile=0.6, affect='EDGES', clamp_overlap=True)
-    triplanar_uv(bm)
+        if hard: bmesh.ops.bevel(bm, geom=hard, offset=BEVEL, segments=2, profile=0.6, affect='EDGES', clamp_overlap=True)
+    triplanar_uv(bm, UVS)
     bm.to_mesh(me); bm.free()
     me.materials.append(MATS[mat_key])
     for p in me.polygons: p.use_smooth = True
@@ -142,6 +151,7 @@ tri_total = 0
 for slot, data in rig['slots'].items():
     px, py, pz = data['pivot']
     emp = bpy.data.objects.new(slot, None); emp.location = (px, -pz, py); scene.collection.objects.link(emp)
+    if rig.get('local'): emp['local'] = 1
     by_mat = {}
     for p in data['parts']: by_mat.setdefault(p['mat'], []).extend(p['pos'])
     for mk, tris in by_mat.items():
@@ -153,5 +163,5 @@ for name, (x, y, z) in rig['anchors'].items():
 
 print('triangles ~', tri_total)
 bpy.ops.export_scene.gltf(filepath=out, export_format='GLB', export_apply=True, export_yup=True, export_image_format='AUTO',
-                          export_materials='EXPORT', export_normals=True, export_tangents=False, use_selection=False)
+                          export_materials='EXPORT', export_extras=True, export_normals=True, export_tangents=False, use_selection=False)
 print('wrote', out)
