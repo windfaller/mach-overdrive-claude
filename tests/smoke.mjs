@@ -256,14 +256,16 @@ if (which === 'all' || which === 'hero') {
         const out = { mapped: !!torso && torso.parent === m.torso && arm.parent === m.armL && rArm.parent === m.armR,
           procHidden: m.torso.children.filter(c => c.userData.proc && !c.visible).length };
         const q = o => o.getWorldQuaternion(new THREE_Q());
-        const wait = s => new Promise(r => setTimeout(r, s * 1000));
+        // wait in game time, not wall time: a busy CI runner can stall frames for a second (shader compiles on first spawn)
+        const wait = s => new Promise(r => { const t0 = G.missionTime, w0 = performance.now(); const tick = () => (G.missionTime - t0 >= s || performance.now() - w0 > 15000) ? r() : setTimeout(tick, 16); tick(); });
+        out.mt0 = +G.missionTime.toFixed(2);
         // banking: strafe hard and compare the authored torso's world rotation
         const q0 = q(torso); G.input.simKey('KeyD', true); await wait(0.6); const q1 = q(torso); G.input.simKey('KeyD', false);
         out.bank = +q0.angleTo(q1).toFixed(3);
         // blade: anticipation -> swing on the authored left arm
         const a0 = q(arm); const t = G.targetList.find(t => t.alive) || null; G.player.findMeleeTarget = () => t; G.player.startMelee();
         let amax = 0; for (let i = 0; i < 8; i++) { await wait(0.04); amax = Math.max(amax, a0.angleTo(q(arm))); }
-        out.blade = +amax.toFixed(3);
+        out.blade = +amax.toFixed(3); out.mt1 = +G.missionTime.toFixed(2);
         return out;
       }, node);
       if (!r.mapped || !r.procHidden) fail('hero player', 'mapping ' + JSON.stringify(r));
