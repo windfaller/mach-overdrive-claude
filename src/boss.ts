@@ -14,7 +14,7 @@ const cBase = new THREE.Color(1.2, 2.2, 3.4); const cMat = glow(1.2, 2.2, 3.4);
 
 class BossPart implements Target {
   alive = true; radius: number; lockable: boolean; maxLocks: number; locks = 0; pos = new THREE.Vector3(); kind: string; isBoss = true;
-  anchor: THREE.Object3D; hp = 0; maxHp = 0; mesh?: THREE.Object3D; label = ''; burning = false;
+  anchor: THREE.Object3D; hp = 0; maxHp = 0; mesh?: THREE.Object3D; label = ''; burning = false; role = '';
   constructor(kind: string, anchor: THREE.Object3D, r: number, lockable: boolean, maxLocks = 1) { this.kind = kind; this.anchor = anchor; this.radius = r; this.lockable = lockable; this.maxLocks = maxLocks; }
   hit(dmg: number, p: THREE.Vector3, src: string) { G.boss.damage(this, dmg, p, src); }
 }
@@ -49,8 +49,9 @@ export class Boss {
   plates: { m: THREE.Mesh; v: THREE.Vector3; w: THREE.Vector3; home: THREE.Vector3 }[] = [];
   hp = 1; maxHp = 8000; state = 'off'; t = 0; atk = ''; atkT = 0; atkIdx = 0; idleT = 0; exposedT = 0; morph = 0; power = 0;
   coreMesh!: THREE.Mesh; blade!: THREE.Group; beam: THREE.Mesh; beamCore: THREE.Mesh; tele: THREE.Mesh; arc: THREE.Mesh; arcMat: THREE.ShaderMaterial;
+  lurch = 0; lurchSide = 1; bubbles: THREE.Mesh[] = []; bubbleMat!: THREE.ShaderMaterial; shieldPingT = 0;
   beamFrom = new THREE.Vector3(); beamTo = new THREE.Vector3(); beamOn = false; beamR = 4; sweep: any = {}; slashD: any = {}; prevFT = 0; fin: any = {};
-  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D(); arcs: Arcs; arcPts: THREE.Vector3[] = []; mixer: THREE.AnimationMixer | null = null; morphAction: THREE.AnimationAction | null = null;
+  basePos = new THREE.Vector3(0, 26, -215); look = new THREE.Object3D(); arcs: Arcs; arcPts: THREE.Vector3[] = []; mixer: THREE.AnimationMixer | null = null; heroMats: THREE.MeshStandardMaterial[] = []; morphAction: THREE.AnimationAction | null = null;
 
   constructor(scene: THREE.Scene) {
     this.root.scale.setScalar(SC); this.root.visible = false; scene.add(this.root); this.arcs = new Arcs(scene);
@@ -127,6 +128,20 @@ export class Boss {
       this.weak.push(p); this.parts.push(p);
     };
     wp(wings[0], -40, -4, 6.5, 'wp_port'); wp(wings[1], 40, -4, 6.5, 'wp_star'); wp(bridge, 0, 9, 4, 'wp_spire');
+    // each weak point runs one system: port = missile hatches, starboard = deflector, spire = sweep-beam emitter.
+    // While the deflector stands, the other two sit inside a shield bubble and take half damage.
+    this.weak[0].role = 'missiles'; this.weak[1].role = 'deflector'; this.weak[2].role = 'beam';
+    this.bubbleMat = new THREE.ShaderMaterial({
+      uniforms: { uT: { value: 0 }, uHit: { value: 0 } },
+      vertexShader: `varying vec3 vN; varying vec3 vV; varying vec3 vP; void main(){ vP = position; vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform float uT, uHit; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+        void main(){ float rim = pow(1.0 - abs(dot(vN, vV)), 2.5);
+          float hex = step(0.92, fract((vP.x + vP.y * 0.577) * 0.35)) + step(0.92, fract((vP.x - vP.y * 0.577) * 0.35)) + step(0.92, fract(vP.y * 0.4));
+          float a = rim * 0.8 + min(hex, 1.0) * (0.12 + 0.5 * uHit) * (0.6 + 0.4 * sin(uT * 3.0 + vP.y));
+          gl_FragColor = vec4(vec3(0.4, 1.6, 3.0) * a, a); }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    });
+    for (const w of [this.weak[0], this.weak[2]]) { const b = new THREE.Mesh(new THREE.IcosahedronGeometry(8.5, 3), this.bubbleMat); b.visible = false; w.anchor.add(b); this.bubbles.push(b); }
     this.core = new BossPart('core', this.coreMesh, 6 * SC, false, 8); this.core.hp = 1; this.parts.push(this.core);
     // hull spheres
     const hull = (parent: THREE.Object3D, x: number, y: number, z: number, r: number) => { const p = new BossPart('hull', anchor(parent, x, y, z), r * SC, false); this.parts.push(p); };
@@ -153,6 +168,8 @@ export class Boss {
   get targets(): Target[] { return this.state === 'off' ? [] : this.parts.concat(this.armorPts); }
   /** Authored HELIOS: modules ride the procedural transform; an optional 'transform' clip replaces it. */
   applyHeroModel(src: THREE.Object3D, clips: THREE.AnimationClip[] = []) {
+    // authored glow strips take the shared glow material so power-up / damage pulses still drive them
+    src.traverse((o: any) => { if (!o.isMesh) return; if (/glow/i.test(o.material.name)) o.material = gMat; else this.heroMats.push(o.material); });
     const n = mapHelios(this.mods as any, { weak: this.weak.map(w => w.anchor), core: this.coreMesh }, src, this.root);
     const clip = clips.find(c => /transform/i.test(c.name));
     if (clip) { this.mixer = new THREE.AnimationMixer(this.root); this.morphAction = this.mixer.clipAction(clip); this.morphAction.play(); this.morphAction.paused = true; }
@@ -176,6 +193,7 @@ export class Boss {
     this.blade.visible = false; this.blade.scale.x = 0.001;
     for (const p of this.plates) { p.m.visible = true; p.m.position.copy(p.home); p.m.rotation.set(0, 0, 0); }
     for (const p of this.weak) { p.alive = true; p.hp = p.maxHp; p.locks = 0; p.mesh!.visible = true; p.burning = false; }
+    for (const b of this.bubbles) b.visible = false; this.lurch = 0;
     for (const p of this.parts) { p.locks = 0; if (p.kind === 'hull') p.alive = true; }
     for (const a of this.armorPts) { a.alive = false; a.locks = 0; }
     this.core.alive = false; this.core.lockable = false; this.coreMesh.visible = false; this.coreMesh.scale.setScalar(1);
@@ -193,6 +211,8 @@ export class Boss {
     for (const p of this.parts) p.anchor.getWorldPosition(p.pos);
     for (const p of this.armorPts) p.anchor.getWorldPosition(p.pos);
   }
+  sysOn(role: string) { const w = this.weak.find(x => x.role === role); return !!w && w.alive; }
+  shielded(p: BossPart) { return p.kind === 'weak' && p.role !== 'deflector' && this.state === 'p1' && this.sysOn('deflector'); }
   damage(p: BossPart, dmg: number, at: THREE.Vector3, src: string) {
     if (!p.alive || !(this.state === 'p1' || this.state === 'p2')) {
       if (p.kind === 'armor' && p.alive) { p.alive = false; fx.explosion(at, 2.2, undefined, { debris: 4, sound: Math.random() < 0.5 }); }
@@ -201,6 +221,7 @@ export class Boss {
     }
     let real = 0;
     if (p.kind === 'weak') {
+      if (this.shielded(p)) { dmg *= 0.5; this.bubbleMat.uniforms.uHit.value = 1; if (this.shieldPingT <= 0) { this.shieldPingT = 0.15; fx.ring(at, 1, 6, 0.2, 0.4, 1.6, 3, false, 0.7); sfx.shieldHit(); } }
       real = dmg; p.hp -= dmg; bodyMat.emissive.setRGB(0.4, 0.1, 0.05);
       if (src === 'laser') { fx.sparks(at, 8, 35, 3, 1.5, 0.4); sfx.hit(); }
       if (p.hp <= 0) this.destroyWeak(p);
@@ -218,6 +239,10 @@ export class Boss {
     slowmo(0.35, 0.35); shake(0.8); flash(0.15, 1, 0.7, 0.4);
     const left = this.weak.filter(w => w.alive).length;
     G.hud.big('b_weakDown', 'kill', 1.4, { name: '@' + p.label }); G.hud.small('m_weakN', 'ok', { n: 3 - left }); G.addScore && G.addScore(2500, 'k_weak');
+    // the system it ran goes offline, and the hull lurches: a free window with no attack
+    G.hud.small('m_sys_' + p.role, 'ok'); this.lurch = 1; this.lurchSide = p.pos.x < this.root.position.x ? -1 : 1;
+    if (this.state === 'p1' && left > 0) { this.endAttack(3.2); sfx.explosion(3, 0.8); }
+    if (p.role === 'deflector') { for (const b of this.bubbles) b.visible = false; fx.ring(p.pos, 2, 60, 0.6, 0.5, 1.8, 3); }
     this.hp -= 120;
     if (left === 0 && this.state === 'p1') { this.hp = Math.min(this.hp, this.maxHp * 0.5); this.beginTransform(); }
   }
@@ -225,34 +250,38 @@ export class Boss {
   beginTransform() {
     if (this.state !== 'p1') return;
     this.state = 'transform'; this.t = 0; this.fin = {}; this.beam.visible = this.tele.visible = this.beamOn = false; this.arc.visible = false;
-    G.cinematic = true; G.player.clearLocks(); G.enemies.clear(); G.hud.warn('w_shift', 6); sfx.bossWarning(); stopMusic(0.5);
+    G.cinematic = true; G.player.clearLocks(); G.enemies.clear(); G.hud.warn('w_shift', 6); sfx.bossWarning(); stopMusic(0.5); G.comms && G.comms.say('c4c', true);
     G.hud.objective('o_survive');
   }
   enterP2() {
     this.state = 'p2'; this.t = 0; this.idleT = 1.5; this.atkIdx = 0; this.atk = ''; G.cinematic = false; G.camRig = null;
     this.core.alive = true; this.core.lockable = true; this.coreMesh.visible = true; this.blade.visible = true; this.blade.scale.x = 1;
-    setMusic(3); G.hud.objective('o_core');
+    setMusic(3); G.hud.objective('o_core'); G.comms && G.comms.say('c4d', true);
   }
   beginFinisherReady() {
     this.state = 'fready'; this.t = 0; this.beam.visible = this.tele.visible = this.beamOn = false; this.arc.visible = false;
     G.enemies.clear(); G.player.clearLocks();
-    G.hud.warn('w_critical', 3); G.hud.prompt('p_finisher', 6); sfx.warning(); slowmo(0.4, 0.8); this.arcs.on = true; this.exposedT = 99; G.hud.objective('');
+    G.hud.warn('w_critical', 3); G.hud.prompt('p_finisher', 6); G.comms && G.comms.say('c4e', true); sfx.warning(); slowmo(0.4, 0.8); this.arcs.on = true; this.exposedT = 99; G.hud.objective('');
   }
   beginFinisher() {
     this.state = 'finisher'; this.t = 0; this.prevFT = 0; G.cinematic = true; G.player.auto = true; G.player.meleeState = 'none'; G.player.clearLocks(); G.hud.prompt('', 0);
-    this.fin = { from: new THREE.Vector3() };
+    this.fin = { from: new THREE.Vector3() }; G.comms && G.comms.say('c4f', true);
   }
   // ---------------- per frame ----------------
   update(dt: number) {
     if (this.state === 'off') return;
     this.t += dt; const P = G.player.pos;
     bodyMat.emissive.multiplyScalar(Math.exp(-12 * dt));
+    for (const m of this.heroMats) m.emissive.copy(bodyMat.emissive);
     if (this.exposedT > 0) this.exposedT -= dt;
     const r = this.root;
     if (this.state === 'intro') this.intro(dt);
     else if (this.state === 'p1') {
       r.position.x = damp(r.position.x, Math.sin(this.t * 0.25) * 30 + P.x * 0.3, 0.8, dt); r.position.y = damp(r.position.y, this.basePos.y + Math.sin(this.t * 0.6) * 5, 1, dt); r.position.z = damp(r.position.z, this.basePos.z, 1, dt);
-      r.rotation.y = 0.45 + Math.sin(this.t * 0.2) * 0.15; r.rotation.z = Math.sin(this.t * 0.5) * 0.04;
+      this.lurch = Math.max(0, this.lurch - dt * 0.8); const lu = Math.sin(Math.min(1, (1 - this.lurch) * 3) * Math.PI) * this.lurch;
+      r.rotation.y = 0.45 + Math.sin(this.t * 0.2) * 0.15; r.rotation.z = Math.sin(this.t * 0.5) * 0.04 + lu * 0.14 * this.lurchSide; r.position.y -= lu * 10 * dt * 6;
+      this.shieldPingT -= dt; const u = this.bubbleMat.uniforms; u.uT.value = this.t; u.uHit.value = Math.max(0, u.uHit.value - dt * 4);
+      const sh = this.sysOn('deflector') && !G.cinematic; for (let i = 0; i < this.bubbles.length; i++) this.bubbles[i].visible = sh && [this.weak[0], this.weak[2]][i].alive;
       this.phase1(dt);
     } else if (this.state === 'transform') this.transform(dt);
     else if (this.state === 'p2') this.phase2(dt);
@@ -301,7 +330,7 @@ export class Boss {
   }
   nextAttack(list: string[]) { this.atk = list[this.atkIdx % list.length]; this.atkIdx++; this.atkT = 0; this.sweep = {}; this.slashD = {}; }
   phase1(dt: number) {
-    if (!this.atk) { this.idleT -= dt; if (this.idleT <= 0) this.nextAttack(['missiles', 'sweep', 'drones', 'sweep', 'missiles', 'drones', 'sweep']); }
+    if (!this.atk) { this.idleT -= dt; if (this.idleT <= 0) this.nextAttack(['missiles', 'sweep', 'drones', 'sweep', 'missiles', 'drones', 'sweep'].map(a => a === 'sweep' && !this.sysOn('beam') ? 'drones' : a)); }
     else {
       this.atkT += dt; const t = this.atkT;
       if (this.atk === 'missiles') {
@@ -309,7 +338,7 @@ export class Boss {
         if (t < 0.05 && !this.sweep.w) { this.sweep.w = true; G.hud.warn('w_hatch', 1.4); sfx.charge(0.8); }
         if (t < 0.8) { this.setPower(1 + Math.sin(t * 40) * 0.4 + t); for (let k = 0; k < 2; k++) { tmp.set(rand(-8, 8), 10.5, rand(-20, 20)); this.mods.torso.g.localToWorld(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, rand(5, 20), 0, 0.3, 4, 1, 3, 1, 0.3, 2, 0.4, 0.1, 1, 0, 0, 0, 0, 1); } }
         else if (t < 0.85) { this.setPower(1); G.hud.warn('w_barrage', 1.4); sfx.alarm(); }
-        if (Math.floor(t * 10) !== Math.floor((t - dt) * 10) && t > 0.8 && t < 2.2) {
+        if (Math.floor(t * 10) !== Math.floor((t - dt) * 10) && t > 0.8 && t < (this.sysOn('missiles') ? 2.2 : 1.4)) {
           tmp.set(rand(-8, 8), 10, rand(-20, 20)); this.mods.torso.g.localToWorld(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 0, 0, 0.12, 8, 2, 3, 1.5, 0.5, 2, 0.4, 0.1, 1, 0, 0, 0, 0, 1);
           G.enemies.fireMissile(tmp, tmp2.set(rand(-40, 40), rand(50, 80), rand(10, 40)), 1.5); sfx.missile();
         }
@@ -324,7 +353,7 @@ export class Boss {
       }
     }
     // passive turret fire
-    if (Math.random() < dt * 1.6 && G.player.alive) { tmp.set(rand(-10, 10), 9, rand(-10, 20)); this.mods.torso.g.localToWorld(tmp); G.enemies.fireOrb(tmp, G.player.pos, 85, 8, true, 0.04); }
+    if (Math.random() < dt * (this.sysOn('missiles') ? 1.6 : 0.7) && G.player.alive) { tmp.set(rand(-10, 10), 9, rand(-10, 20)); this.mods.torso.g.localToWorld(tmp); G.enemies.fireOrb(tmp, G.player.pos, 85, 8, true, 0.04); }
   }
   endAttack(idle: number) { this.atk = ''; this.idleT = idle; this.beamOn = false; this.beam.visible = false; this.tele.visible = false; }
   sweepAttack(dt: number) {

@@ -106,21 +106,22 @@ export class Director {
     if (name === 'boss') { yield* this.mission(4); return; }
     if (name === 'missile') { W.setSection('city', true); setMusic(2); for (;;) { H.prompt('p_lock', 6); drones(8, 'wall', { shoot: false, stay: 60 }); yield wait(0.6); drones(4, 'arc', { shoot: false, stay: 60 }); yield cleared(60); yield wait(1.5); } }
     if (name === 'blade') { W.setSection('highway', true); setMusic(2); for (;;) { H.prompt('p_blade', 6); fighters(4, { shoot: false, stay: 40 }); heavy(0, 8); yield cleared(40); yield wait(1); } }
+    if (name === 'beam') { W.setSection('highway', true); setMusic(2); for (;;) { H.prompt('p_beam', 6); heavy(-22, 2); heavy(0, 10); heavy(22, 16); drones(8, 'wall', { shoot: false, stay: 40 }); yield cleared(40); yield wait(1); } }
     if (name === 'raven') { W.setSection('highway', true); setMusic(2); for (;;) { E.spawn('elite', { from: V(0, 60, -400) }); yield until(() => E.count('elite') === 0, 120); yield wait(3); } }
     if (name === 'fleet') { W.setSection('fleet', true); setMusic(2); for (;;) { E.startShip(); H.prompt('p_core', 6); yield until(() => E.ship.state === 'off', 60); yield wait(2); } }
     if (name === 'transform') { W.setSection('sky', true); setMusic(2); G.boss.start(true); yield wait(1.5); G.boss.hp = G.boss.maxHp * 0.5; G.boss.beginTransform(); yield until(() => G.boss.state === 'dead'); }
     if (name === 'finisher') { W.setSection('sky', true); setMusic(3); G.boss.startPhase2Direct(); yield wait(1.2); G.boss.hp = G.boss.maxHp * 0.04; G.boss.beginFinisherReady(); yield until(() => G.boss.state === 'dead'); }
   }
   *mission(start: number): Generator<Cond> {
-    const H = G.hud, W = G.world, E = G.enemies;
+    const H = G.hud, W = G.world, E = G.enemies, C = G.comms;
     if (start <= 0) {
       this.checkpoint = 0; H.setSector('sec1'); setMusic(1); resumeMusic();
-      H.big('b_start', 'perfect', 2.4); H.objective('o_break');
-      yield wait(2.6);
+      G.comms.chapter(0, 'ch0', 'ch0l'); H.objective('o_break');
+      yield wait(2.6); H.big('b_start', 'perfect', 2.0); C.say('c0a'); C.say('c0b');
       H.prompt('p_fly', 6);
       drones(6, 'arc', { shoot: false, stay: 16 }); yield cleared(18);
       yield wait(0.8);
-      H.big('b_swarm', 'kill'); H.prompt('p_lock', 8);
+      H.big('b_swarm', 'kill'); H.prompt('p_lock', 8); C.say('c0c');
       H.objective('o_multilock');
       drones(8, 'wall', { shoot: false, stay: 18 }); yield wait(1.2); drones(6, 'arc', { shoot: false, stay: 17, fromBehind: true });
       yield cleared(22);
@@ -129,17 +130,18 @@ export class Director {
       H.objective('o_skyline'); setMusic(2);
       drones(8, 'random', { rate: 0.35 }); fighters(4); yield wait(7); drones(10, 'ring', { rate: 0.3 }); fighters(2);
       yield cleared(26);
-      yield wait(1); H.big('b_wave2', 'kill'); drones(12, 'arc', { rate: 0.3, fromBehind: true }); yield wait(3); fighters(4); heavy(0, 14);
+      yield wait(1); H.big('b_wave2', 'kill'); C.say('c0d'); drones(12, 'arc', { rate: 0.3, fromBehind: true }); yield wait(3); fighters(4); heavy(0, 14);
       yield cleared(30);
     }
     if (start <= 1) {
-      this.checkpoint = 1; W.setSection('highway'); H.setSector('sec2'); H.big('b_highway', 'kill'); setMusic(2); resumeMusic();
-      H.objective('o_highway'); yield wait(2.5);
+      this.checkpoint = 1; W.setSection('highway'); H.setSector('sec2'); G.comms.chapter(1, 'ch1', 'ch1l'); setMusic(2); resumeMusic();
+      H.objective('o_highway'); yield wait(2.5); C.say('c1a');
       fighters(4); yield wait(3); heavy(0); drones(6, 'arc');
       H.prompt('p_blade', 8);
       yield cleared(32);
+      H.prompt('p_beam', 8); C.say('c1b'); heavy(-22, 2); heavy(22, 14); drones(6, 'arc', { rate: 0.2 }); yield cleared(24);
       fighters(6); yield wait(4); drones(10, 'wall', { rate: 0.3 }); heavy(-30, 12); yield cleared(26);
-      yield wait(1); H.warn('w_elite', 2.5); sfx.warning(); yield wait(2.8);
+      yield wait(1); H.warn('w_elite', 2.5); sfx.warning(); C.say('c1c', true); yield wait(2.8);
       E.spawn('elite', { from: V(0, 60, -400) }); H.objective('o_raven');
       yield wait(2.6); H.prompt('p_raven', 7);
       for (let k = 0; k < 6 && E.count('elite') > 0; k++) { yield until(() => E.count('elite') === 0, 15); if (E.count('elite') > 0) drones(4, 'random', { rate: 0.2 }); }
@@ -147,28 +149,29 @@ export class Director {
       yield cleared(12);
     }
     if (start <= 2) {
-      this.checkpoint = 2; W.setSection('fleet'); H.setSector('sec3'); H.big('b_fleet', 'kill', 2); setMusic(2); resumeMusic();
-      H.objective('o_fleet'); yield wait(3);
+      this.checkpoint = 2; W.setSection('fleet'); H.setSector('sec3'); G.comms.chapter(2, 'ch2', 'ch2l'); setMusic(2); resumeMusic();
+      H.objective('o_fleet'); yield wait(3); C.say('c2a');
       drones(12, 'random', { rate: 0.3 }); fighters(4); yield wait(6); drones(8, 'arc'); yield cleared(26);
       heavy(-35, 2); heavy(35, 14); drones(6, 'ring'); yield cleared(30);
       E.startShip(); H.warn('w_ship', 2.5); sfx.warning();
-      H.objective('o_shipcore'); yield wait(2);
+      H.objective('o_shipcore'); C.say('c2b'); yield wait(2);
       H.prompt('p_core', 8);
       yield until(() => E.ship.state === 'off', 45);
+      C.say('c2c'); C.say('c2d');
       fighters(6); drones(8, 'wall', { rate: 0.3 }); yield cleared(24);
       H.big('b_escorts', 'kill'); heavy(-30, 0); heavy(30, 12); drones(10, 'ring', { rate: 0.3 }); yield wait(5); fighters(4); yield cleared(30);
     }
     if (start <= 3) {
       this.checkpoint = 3; if (start === 3) W.setSection('fleet', true);
-      W.setSection('tunnel'); G.player.bounds.r = 22; H.setSector('sec4'); H.objective('o_driver');
-      H.warn('w_driver', 2.5); sfx.warning(); setMusic(2);
+      W.setSection('tunnel'); G.player.bounds.r = 22; H.setSector('sec4'); H.objective('o_driver'); G.comms.chapter(3, 'ch3', 'ch3l');
+      H.warn('w_driver', 2.5); sfx.warning(); setMusic(2); C.say('c3a');
       yield until(() => W.tunnel.state === 'on', 20);
       G.player.bounds.r = 22; this.tunnel.run = true; this.tunnel.t = 1; H.big('b_maxv', 'perfect');
       H.prompt('p_tunnel', 5);
       G.speedRamp = 1;
       yield wait(30);
       this.tunnel.run = false; G.speedRamp = 2; yield wait(2.5);
-      W.tunnel.exit(); H.small('m_light', 'ok');
+      W.tunnel.exit(); H.small('m_light', 'ok'); C.say('c3b', true);
       yield until(() => W.tunnel.group.position.z - W.tunnel.len > -60, 20);
       flash(1.2, 1, 1, 1); sfx.explosion(3, 0.6); shake(0.6); G.speedRamp = 0; G.baseSpeed = 140; this.tunnel.clear();
       G.player.bounds.r = 0; W.tunnel.off(); W.setSection('sky', true);
@@ -179,9 +182,9 @@ export class Director {
     this.checkpoint = 4;
     if (start === 4) W.setSection('sky', true);
     H.setSector('secF'); H.objective(''); G.cinematic = true;
-    G.boss.start(); H.warn('w_boss', 5); sfx.bossWarning(); setMusic(0);
+    G.boss.start(); H.warn('w_boss', 5); sfx.bossWarning(); setMusic(0); G.comms.chapter(4, 'ch4', 'ch4l');
     yield wait(3.4); H.big('b_helios', 'boss', 2.6); yield wait(4.8);
-    H.prompt('p_weak', 6);
+    C.say('c4a', true); H.prompt('p_weak', 6); yield wait(4); C.say('c4b'); yield wait(3); if (G.boss.state === 'p1' && G.boss.sysOn('deflector')) H.prompt('p_weakSys', 7);
     yield until(() => G.boss.state === 'dead');
   }
 }

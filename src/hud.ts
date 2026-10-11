@@ -8,7 +8,7 @@ const scr = { x: 0, y: 0, z: 0, on: false };
 type P = Record<string, string | number>;
 
 export class HUD {
-  root = $('hud'); hpB = $('hpB'); hpV = $('hpV'); hpP = $('hpP'); enB = $('enB'); enP = $('enP'); spdV = $('spdV'); msl = $('mslState'); mslB = $('mslB'); lockN = $('lockN');
+  root = $('hud'); hpB = $('hpB'); hpV = $('hpV'); hpP = $('hpP'); shB = $('shB'); vignS = $('vignS'); vignSA = 0; thA: HTMLDivElement[] = []; enB = $('enB'); enP = $('enP'); spdV = $('spdV'); msl = $('mslState'); mslB = $('mslB'); lockN = $('lockN'); beamS = $('beamState'); beamB = $('beamB'); chgArc = $('chgArc');
   bossP = $('bossP'); bossHp = $('bossHp'); bossGhost = $('bossGhost'); score = $('score'); combo = $('combo'); comboN = $('comboN'); feed = $('feed');
   ret = $('reticle'); ring = $('lockRing'); bigE = $('big'); smallE = $('small'); warnE = $('warn'); promptE = $('prompt'); vign = $('vign'); tag = $('tag');
   obj = $('objective'); sector = $('sector'); ohE = $('overheat'); markers: HTMLDivElement[] = []; thM: HTMLDivElement[] = []; wpM: HTMLDivElement[] = []; warnT = 0; promptT = 0; vignA = 0; lastHp = -1; lastBoss = -1;
@@ -18,6 +18,7 @@ export class HUD {
     for (let i = 0; i < 16; i++) { const d = document.createElement('div'); d.className = 'lockM'; d.innerHTML = '<span></span>'; box.appendChild(d); this.markers.push(d); }
     for (let i = 0; i < 28; i++) { const d = document.createElement('div'); d.className = 'thM'; box.appendChild(d); this.thM.push(d); }
     for (let i = 0; i < 3; i++) { const d = document.createElement('div'); d.className = 'wpM'; d.innerHTML = '<i></i><span></span>'; box.appendChild(d); this.wpM.push(d); }
+    for (let i = 0; i < 8; i++) { const d = document.createElement('div'); d.className = 'thA'; d.innerHTML = '<i></i>'; box.appendChild(d); this.thA.push(d); }
     onI18n(() => this.relabel());
   }
   relabel() {
@@ -44,7 +45,7 @@ export class HUD {
   }
   objective(key: string) { this.cur.obj = key; this.obj.textContent = key ? tt(key) : ''; }
   setSector(key: string) { this.cur.sector = key; this.sector.textContent = tt(key); }
-  damage(_from?: THREE.Vector3) { this.vignA = 1; }
+  damage(_from?: THREE.Vector3, shield = false) { if (shield) this.vignSA = 0.8; else this.vignA = 1; }
   boss(frac: number, visible: boolean) {
     this.bossP.style.display = visible ? 'block' : 'none';
     if (visible && Math.abs(frac - this.lastBoss) > 0.0005) { this.lastBoss = frac; this.bossHp.style.transform = `scaleX(${clamp(frac, 0, 1)})`; this.bossGhost.style.transform = `scaleX(${clamp(frac, 0, 1)})`; }
@@ -60,12 +61,20 @@ export class HUD {
     this.root.classList.toggle('cine', !!G.cinematic);
     const hp = Math.max(0, Math.round(p.hp));
     if (hp !== this.lastHp) { this.lastHp = hp; this.hpV.textContent = String(hp); this.hpB.style.transform = `scaleX(${p.hp / p.maxHp})`; this.hpP.classList.toggle('low', p.hp < 30); }
+    this.shB.style.transform = `scaleX(${p.shield / p.maxShield})`; this.hpP.classList.toggle('shOff', p.shield <= 0);
+    this.vignSA = Math.max(0, this.vignSA - dt * 2.4); this.vignS.style.opacity = String(this.vignSA);
     this.enB.style.transform = `scaleX(${p.energy / 100})`; this.enB.classList.toggle('lock', p.boostLock);
     this.enP.classList.toggle('oh', p.boostLock); this.enP.classList.toggle('lowE', !p.boostLock && p.energy < 25);
     this.ohE.style.display = p.boostLock ? 'block' : 'none';
     this.spdV.textContent = String(Math.round(G.speed * 7.2 + (p.boosting ? Math.random() * 20 : 0)));
     if (p.missileReady) { this.msl.textContent = tt(p.locking ? 'locking' : 'ready'); this.msl.className = 'ready'; this.mslB.style.transform = 'scaleX(1)'; }
     else { this.msl.textContent = tt('reload'); this.msl.className = 'rl'; this.mslB.style.transform = `scaleX(${1 - p.reloadT / p.reloadMax})`; }
+    if (p.charging) { const c = p.charge / p.chargeMax; this.beamS.textContent = c >= 1 ? tt('m_beamFull') : tt('charging'); this.beamS.className = 'chg'; this.beamB.style.transform = `scaleX(${c})`; }
+    else if (p.beamCd > 0) { this.beamS.textContent = tt('reload'); this.beamS.className = 'rl'; this.beamB.style.transform = `scaleX(${1 - p.beamCd / p.beamCdMax})`; }
+    else { this.beamS.textContent = tt('ready'); this.beamS.className = 'ready'; this.beamB.style.transform = 'scaleX(1)'; }
+    const cf = p.charging ? p.charge / p.chargeMax : 0;
+    this.chgArc.setAttribute('stroke-dasharray', `${(cf * 169.6).toFixed(1)} 170`); this.chgArc.setAttribute('opacity', cf > 0 ? '1' : '0');
+    this.ret.classList.toggle('full', cf >= 1);
     this.lockN.textContent = `${p.locks.length}/${p.maxLocks}`;
     this.lockN.classList.toggle('full', p.locks.length >= p.maxLocks);
     this.tag.style.display = p.bonusT > 0 ? 'block' : 'none';
@@ -105,6 +114,21 @@ export class HUD {
       }
     }
     for (; ti < this.thM.length; ti++) this.thM[ti].style.display = 'none';
+    // incoming enemy missiles that are off screen: red arrows on the screen edge pointing at them
+    let ai = 0;
+    if (!G.cinematic && p.alive) {
+      const cx = G.width / 2, cy = G.height / 2, mx = cx - 40, my = cy - 40;
+      for (const ms of G.enemies.missiles) {
+        if (ai >= this.thA.length) break;
+        if (!ms.alive || ms.p.distanceTo(p.pos) > 260) continue;
+        toScreen(ms.p, scr); if (scr.on && scr.z < 1) continue;
+        let dx = scr.x - cx, dy = scr.y - cy; if (scr.z >= 1) { dx = -dx; dy = -dy; }
+        const k = Math.min(mx / Math.max(Math.abs(dx), 1e-3), my / Math.max(Math.abs(dy), 1e-3));
+        const a = this.thA[ai++]; a.style.display = 'block';
+        a.style.transform = `translate(${cx + dx * k}px, ${cy + dy * k}px) rotate(${Math.atan2(dy, dx)}rad)`;
+      }
+    }
+    for (; ai < this.thA.length; ai++) this.thA[ai].style.display = 'none';
     // boss weak-point markers
     const b = G.boss; const showWp = b.state === 'p1' && !G.cinematic;
     for (let i = 0; i < this.wpM.length; i++) {
@@ -113,7 +137,8 @@ export class HUD {
       toScreen(w.pos, scr); if (!scr.on) { m.style.display = 'none'; continue; }
       m.style.display = 'block'; m.style.transform = `translate(${scr.x}px, ${scr.y}px)`;
       (m.firstChild as HTMLElement).style.transform = `scaleX(${clamp(w.hp / w.maxHp, 0, 1)})`;
-      (m.lastChild as HTMLElement).textContent = tt(w.label);
+      (m.lastChild as HTMLElement).textContent = tt(w.label) + ' · ' + tt('wr_' + w.role) + (b.shielded(w) ? '  ◇ ' + tt('wr_shielded') : '');
+      m.classList.toggle('sh', b.shielded(w));
     }
     if (this.warnT > 0) { this.warnT -= dt; if (this.warnT <= 0) this.warnE.style.display = 'none'; }
     if (this.promptT > 0) { this.promptT -= dt; if (this.promptT <= 0) this.promptE.style.display = 'none'; }

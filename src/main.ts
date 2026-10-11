@@ -18,6 +18,9 @@ import { Director } from './director';
 import { applyDom, onI18n, setLang, LANGS, tt, t } from './i18n';
 import { loadHeroAssets } from './assets';
 import { Bench } from './bench';
+import { initTouch, updateTouch } from './touch';
+import { Comms } from './comms';
+import { device } from './i18n';
 
 const params = new URLSearchParams(location.search);
 const TEST = params.has('test'); let BOT = params.has('bot');
@@ -73,11 +76,12 @@ const player = new Player(scene); G.player = player;
 const enemies = new Enemies(scene); G.enemies = enemies;
 const boss = new Boss(scene); G.boss = boss;
 const hud = new HUD(); G.hud = hud;
+const comms = new Comms(); G.comms = comms;
 const director = new Director(scene); G.director = director;
 G.targetList = [];
 G.combo = 0; G.comboT = 0; G.threat = 1e9;
 G.god = params.has('god') || params.has('showcase');
-input.initInput(canvas);
+input.initInput(canvas); initTouch(params.has('touch'));
 (window as any).__G = G;
 (window as any).__dbg = { composer, bloom, finalPass, renderer, scene };
 loadHeroAssets({ player, enemies, boss }).catch(e => console.warn('hero assets', e));
@@ -137,12 +141,18 @@ function menuUpdate() {
 document.addEventListener('mousemove', () => { if (navUsed) { navUsed = false; renderFocus(); } });
 
 function resetState() {
-  fx.clear(); enemies.clear(); boss.reset(); player.reset(); director.tunnel.clear(); world.tunnel.off(); world.clearDynamic();
+  fx.clear(); enemies.clear(); boss.reset(); player.reset(); comms.clear(); director.tunnel.clear(); world.tunnel.off(); world.clearDynamic();
   G.state = 'playing'; G.paused = false; G.cinematic = false; G.camRig = null; G.slowTime = 0; G.slowScale = 1; G.hitstopTime = 0; G.speedOverride = 0; G.speedRamp = 0; G.baseSpeed = 140;
   G.combo = 0; player.bounds.r = 0;
 }
+/** On phones: go fullscreen and try to hold landscape (both may be refused; the game works either way). */
+function goImmersive() {
+  if (device !== 'touch' || TEST) return;
+  const el: any = document.documentElement;
+  try { const r = el.requestFullscreen ? el.requestFullscreen({ navigationUI: 'hide' }) : el.webkitRequestFullscreen?.(); if (r && r.then) r.then(() => (screen.orientation as any)?.lock?.('landscape').catch(() => {})).catch(() => {}); } catch (e) { /* not allowed */ }
+}
 function startMission(ch: number) {
-  initAudio(); suspendAudio(false); input.requestLock(canvas);
+  goImmersive(); initAudio(); suspendAudio(false); input.requestLock(canvas);
   showScreen(null); hud.clear(); hud.show(true); resetState();
   if (ch === 0 || !G.stats.start) { G.stats = { kills: 0, maxCombo: 0, perfect: 0, nearMiss: 0, score: 0, start: performance.now() }; }
   world.setSection(Director.sectionOf(ch), true); if (ch === 3) world.setSection('fleet', true);
@@ -150,9 +160,9 @@ function startMission(ch: number) {
   director.start(ch);
   flash(0.6, 0.6, 0.9, 1);
 }
-const SHOWCASES = ['missile', 'blade', 'raven', 'fleet', 'tunnel', 'boss', 'transform', 'finisher'];
+const SHOWCASES = ['missile', 'blade', 'beam', 'raven', 'fleet', 'tunnel', 'boss', 'transform', 'finisher'];
 function startShowcase(name: string) {
-  initAudio(); suspendAudio(false); input.requestLock(canvas);
+  goImmersive(); initAudio(); suspendAudio(false); input.requestLock(canvas);
   showScreen(null); hud.clear(); hud.show(true); resetState();
   G.stats = { kills: 0, maxCombo: 0, perfect: 0, nearMiss: 0, score: 0, start: performance.now() };
   player.startTrails(); resumeMusic();
@@ -268,7 +278,7 @@ function frame(now: number) {
   if (G.state === 'playing' && input.wasPressed('pause')) { setPause(!G.paused); input.endFrame(); return; }
   if (G.paused || G.state !== 'playing') menuUpdate();
   if (BOT && G.state === 'playing') bot(rdt);
-  if (G.paused) { input.endFrame(); return; }
+  if (G.paused) { updateTouch(); input.endFrame(); return; }
   G.realDt = rdt; renderer.info.reset();
   // time scale
   let ts = 1;
@@ -312,6 +322,8 @@ function frame(now: number) {
   finalPass.uniforms.uAberr.value = 0.0005 + Math.max(0, G.vfx - 0.6) * 0.007;
   bloom.strength = 0.6 + G.flash * 0.6;
   if (G.state === 'playing' || G.state === 'title') hud.update(rdt);
+  if (G.state === 'playing') comms.update(dt * 0.4 + rdt * 0.6); else comms.clear();
+  updateTouch();
   // adaptive resolution must change BEFORE drawing: resizing the canvas clears it, and a resize after the
   // draw put a fully black frame on screen every time the pixel ratio stepped (e.g. on heavy blade hits)
   if (adaptT > 1.5 && !TEST) {
@@ -345,13 +357,16 @@ function bot(dt: number) {
   if (botLock > 0) { botLock -= dt; if (botLock <= 0) input.simKey('KeyE', false); }
   else if (p.missileReady && best && botT % 2 < dt) { input.simKey('KeyE', true); botLock = 0.7; }
   input.simKey('Space', G.threat < 0.3);
+  // heavy beam: charge on big targets, release at full
+  const big = best && (best.kind === 'heavy' || best.kind === 'elite' || best.kind === 'weak' || best.kind === 'shipcore' || best.kind === 'core');
+  if (p.charging) input.simKey('KeyQ', p.charge < p.chargeMax && !!best); else input.simKey('KeyQ', !!big && p.beamCd <= 0);
   if (best && best.pos.distanceTo(p.pos) < 90 && Math.random() < 0.05) { input.simKey('KeyF', true); } else input.simKey('KeyF', false);
   if (G.boss.state === 'fready') input.simKey('KeyF', true);
   const tx = best ? clamp(best.pos.x * 0.5, -20, 20) : 0;
   input.simKey('KeyD', p.pos.x < tx - 3); input.simKey('KeyA', p.pos.x > tx + 3);
   input.simKey('ShiftLeft', G.director.tunnel.run || (botT % 9) < 1.2);
 }
-const BOT_KEYS = ['Mouse0', 'KeyE', 'Space', 'KeyF', 'KeyD', 'KeyA', 'ShiftLeft'];
+const BOT_KEYS = ['Mouse0', 'KeyE', 'Space', 'KeyF', 'KeyD', 'KeyA', 'ShiftLeft', 'KeyQ'];
 const bench = new Bench({
   renderer, startShowcase, toTitle, pr: () => pr, particles: () => fx.add.n + fx.smoke.n, ribbons: () => fx.ribbons.filter(r => r.alive).length,
   setBot: on => { BOT = on || params.has('bot'); if (!BOT) for (const k of BOT_KEYS) input.simKey(k, false); },

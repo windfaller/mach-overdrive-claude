@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { G, rand, clamp, damp, lerp, slowmo, hitstop, shake, flash, toScreen, segSphere, easeOut, Target } from './core';
 import { buildMech, Mech, additive } from './models';
 import { fx, Ribbon } from './fx';
-import { sfx } from './audio';
-import { isDown, wasPressed, aimNDC, mouse, moveAxis, pad } from './input';
+import { sfx, setCharge } from './audio';
+import { isDown, wasPressed, wasReleased, aimNDC, mouse, moveAxis, pad, touchStick } from './input';
 import { device } from './i18n';
 import { mapMech } from './assets';
 
@@ -50,16 +50,70 @@ class Bolts {
   }
 }
 
+/** Heavy beam visuals: a charge orb with three intake rings at the muzzle, and the shot itself — a held
+ *  afterimage whose width decays with tail², so the hit reads for a beat after the damage lands. */
+class BeamFx {
+  orb: THREE.Mesh; orbMat: THREE.MeshBasicMaterial; rings: THREE.Mesh[] = []; ringMat: THREE.MeshBasicMaterial;
+  beam: THREE.Mesh; beamMat: THREE.ShaderMaterial; t = 1; dur = 0.42; w = 1; len = 1;
+  from = new THREE.Vector3(); dir = new THREE.Vector3(0, 0, -1);
+  constructor(scene: THREE.Scene) {
+    this.orbMat = additive(1.2, 2.8, 3.6, 0.9);
+    this.orb = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), this.orbMat); this.orb.visible = false; this.orb.frustumCulled = false; scene.add(this.orb);
+    this.ringMat = additive(0.8, 2.2, 3.4, 0.8);
+    for (let i = 0; i < 3; i++) { const r = new THREE.Mesh(new THREE.TorusGeometry(1, 0.045, 6, 40), this.ringMat); r.visible = false; r.frustumCulled = false; scene.add(r); this.rings.push(r); }
+    this.beamMat = new THREE.ShaderMaterial({
+      uniforms: { uA: { value: 0 }, uT: { value: 0 } },
+      vertexShader: `varying vec3 vN; varying vec3 vV; varying float vZ; void main(){ vZ = position.y + 0.5; vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform float uA, uT; varying vec3 vN; varying vec3 vV; varying float vZ;
+        void main(){ float f = abs(dot(vN, vV)); float core = pow(f, 6.0), body = pow(f, 1.6);
+          float ripple = 0.85 + 0.15 * sin(vZ * 900.0 - uT * 80.0);
+          vec3 c = vec3(0.6, 2.2, 3.4) * body * ripple + vec3(4.0) * core;
+          float a = body * uA * smoothstep(0.0, 0.004, vZ);
+          gl_FragColor = vec4(c * a, a); }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const g = new THREE.CylinderGeometry(1, 1, 1, 16, 1, true);
+    this.beam = new THREE.Mesh(g, this.beamMat); this.beam.visible = false; this.beam.frustumCulled = false; scene.add(this.beam);
+  }
+  charge(at: THREE.Vector3, c: number, full: boolean, time: number) {
+    const on = c > 0; this.orb.visible = on; for (const r of this.rings) r.visible = on;
+    if (!on) return;
+    const s = 0.25 + c * 0.75 + (full ? Math.sin(time * 40) * 0.12 : Math.random() * 0.06);
+    this.orb.position.copy(at); this.orb.scale.setScalar(s);
+    this.orbMat.color.setRGB(1.2 + c * 2, 2.8 + c, 3.6 + c); this.ringMat.opacity = 0.35 + c * 0.6;
+    for (let i = 0; i < 3; i++) {
+      const r = this.rings[i]; r.position.copy(at);
+      r.scale.setScalar(lerp(2.6, 1.1, c) + Math.sin(time * 9 + i * 2) * 0.08);
+      r.rotation.set(time * (2.5 + i) + i * 1.1, time * (1.7 - i * 0.6) + i * 2.1, time * 3.1 * (i - 1));
+    }
+  }
+  fire(from: THREE.Vector3, dir: THREE.Vector3, len: number, w: number) {
+    this.from.copy(from); this.dir.copy(dir); this.len = len; this.w = w; this.t = 0; this.beam.visible = true;
+  }
+  update(dt: number, time: number) {
+    if (!this.beam.visible) return;
+    this.t += dt; const u = this.t / this.dur; if (u >= 1) { this.beam.visible = false; return; }
+    const tail = 1 - u, wNow = this.w * (0.35 + 0.65 * tail * tail);
+    this.beam.position.copy(this.from).addScaledVector(this.dir, this.len / 2);
+    this.beam.quaternion.setFromUnitVectors(_yAxis, this.dir);
+    this.beam.scale.set(wNow, this.len, wNow);
+    this.beamMat.uniforms.uA.value = Math.min(1, tail * 1.6); this.beamMat.uniforms.uT.value = time;
+  }
+}
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
 interface Missile { pos: THREE.Vector3; vel: THREE.Vector3; target: Target | null; age: number; alive: boolean; rib: Ribbon | null; dmg: number }
 
 export class Player {
   mech: Mech; root: THREE.Group; pos: THREE.Vector3; vel = new THREE.Vector3();
-  hp = 100; maxHp = 100; energy = 100; alive = true; deadT = 0; invuln = 0; regenDelay = 0;
+  hp = 100; maxHp = 100; shield = 60; maxShield = 60; shieldDelay = 0; shieldHitT = 0; energy = 100; alive = true; deadT = 0; dying = 0; invuln = 0; regenDelay = 0; critT = 0;
+  tumble = new THREE.Vector3();
   boosting = false; boostLock = false; boostT = 0; dodgeT = 0; dodgeDir = new THREE.Vector2(1, 0); dodgeCd = 0; roll = 0; rollTarget = 0;
   bonusT = 0; lastIx = 1;
   meleeState = 'none'; meleeT = 0; meleeDur = 0.2; meleeFrom = new THREE.Vector3(); meleeTarget: Target | null = null; meleeFocus = new THREE.Vector3(); meleeCamT = 0; meleeSide = 1; combo = 0; comboT = 0; meleeCd = 0;
   fireT = 0; recoil = 0; missileReady = true; reloadT = 0; reloadMax = 2.4; locking = false; lockT = 0; maxLocks = 8;
   locks: { t: Target; age: number }[] = [];
+  charging = false; charge = 0; chargeMax = 2; beamCd = 0; beamCdMax = 2.4; beamShots = 0; beamFx: BeamFx;
   missiles: Missile[] = []; bolts: Bolts; ribbons: Ribbon[] = [];
   ghosts: { g: THREE.Group; objs: THREE.Object3D[]; mat: THREE.MeshBasicMaterial; t: number }[] = []; mechObjs: THREE.Object3D[] = [];
   ghostT = 0; slash: THREE.Mesh; slashMat: THREE.ShaderMaterial; slashT = 1;
@@ -71,7 +125,7 @@ export class Player {
     this.scene = scene;
     this.mech = buildMech([0.15, 1.3, 2.0]); this.root = this.mech.root; this.pos = this.root.position; scene.add(this.root);
     this.mech.root.traverse(o => this.mechObjs.push(o));
-    this.bolts = new Bolts(scene);
+    this.bolts = new Bolts(scene); this.beamFx = new BeamFx(scene);
     for (let i = 0; i < 48; i++) this.missiles.push({ pos: new THREE.Vector3(), vel: new THREE.Vector3(), target: null, age: 0, alive: false, rib: null, dmg: 0 });
     this.buildGhosts();
     this.slashMat = new THREE.ShaderMaterial({
@@ -103,9 +157,9 @@ export class Player {
     this.mechObjs = []; this.root.traverse(o => this.mechObjs.push(o)); this.buildGhosts();
   }
   reset() {
-    this.hp = this.maxHp; this.energy = 100; this.alive = true; this.deadT = 0; this.invuln = 1; this.boosting = false; this.boostLock = false;
+    this.hp = this.maxHp; this.shield = this.maxShield; this.shieldDelay = 0; this.dying = 0; this.energy = 100; this.alive = true; this.deadT = 0; this.invuln = 1; this.root.rotation.set(0, 0, 0); this.boosting = false; this.boostLock = false;
     this.pos.set(0, 0, 0); this.vel.set(0, 0, 0); this.dodgeT = 0; this.meleeState = 'none'; this.combo = 0; this.bonusT = 0; this.roll = this.rollTarget = 0;
-    this.missileReady = true; this.reloadT = 0; this.clearLocks(); this.root.visible = true; this.auto = false; this.extraYaw = 0; this.bolts.n = 0;
+    this.missileReady = true; this.reloadT = 0; this.clearLocks(); this.charging = false; this.charge = 0; this.beamCd = 0; setCharge(0, false); this.root.visible = true; this.auto = false; this.extraYaw = 0; this.bolts.n = 0;
     for (const m of this.missiles) { m.alive = false; m.rib = null; }
     for (const g of this.ghosts) { g.t = 0; g.g.visible = false; }
     this.ribbons = [];
@@ -115,17 +169,37 @@ export class Player {
   pruneLocks() { for (let i = this.locks.length - 1; i >= 0; i--) { const l = this.locks[i]; if (!l.t.alive) { l.t.locks = Math.max(0, l.t.locks - 1); this.locks.splice(i, 1); } } }
   clearLocks() { for (const l of this.locks) l.t.locks = Math.max(0, l.t.locks - 1); this.locks.length = 0; this.locking = false; }
 
+  /** Shield absorbs first (recharges after 4 s without hits), then armor. Shield hits read cyan and lighter. */
   damage(n: number, from?: THREE.Vector3) {
-    if (!this.alive || this.invuln > 0 || G.god || G.cinematic || this.meleeState === 'lunge') return false;
-    this.hp -= n; this.invuln = 0.7; this.regenDelay = 5;
-    shake(0.5); flash(0.35, 1, 0.1, 0.05); sfx.damage(); fx.sparks(this.pos, 26, 40, 3, 1.5, 0.5);
-    G.hud.damage(from); G.comboBreak && G.comboBreak();
+    if (!this.alive || this.dying > 0 || this.invuln > 0 || G.god || G.cinematic || this.meleeState === 'lunge') return false;
+    this.invuln = 0.7; this.regenDelay = 5; this.shieldDelay = 4;
+    const absorbed = Math.min(this.shield, n); const hadShield = this.shield > 0;
+    this.shield -= absorbed; n -= absorbed;
+    if (absorbed > 0) {
+      this.shieldHitT = 0.35; fx.ring(this.pos, 1.5, 6, 0.25, 0.4, 1.8, 3, false, 0.8); fx.sparks(this.pos, 14, 30, 0.6, 2, 3);
+      if (this.shield <= 0) { sfx.shieldBreak(); G.hud.small('m_shieldDown', 'warn'); shake(0.45); flash(0.25, 0.3, 0.8, 1.4); fx.ring(this.pos, 1, 16, 0.4, 0.5, 1.6, 3);
+        for (let i = 0; i < 40; i++) { const a = rand(0, 6.28), b = rand(-1, 1); fx.add.emit(this.pos.x, this.pos.y, this.pos.z, Math.cos(a) * 40 * Math.sqrt(1 - b * b), b * 40, Math.sin(a) * 40, 0.5, 0.35, 0.05, 0.5, 2, 3.2, 0.2, 0.6, 1.5, 1, 2, 0, 0.04, 0.4, 1); } }
+      else { sfx.shieldHit(); shake(0.25); flash(0.12, 0.3, 0.8, 1.4); }
+      G.hud.damage(from, true);
+    }
+    if (n > 0) {
+      this.hp -= n; shake(hadShield ? 0.6 : 0.5); flash(0.35, 1, 0.1, 0.05); sfx.damage(); fx.sparks(this.pos, 26, 40, 3, 1.5, 0.5);
+      G.hud.damage(from, false); G.comboBreak && G.comboBreak();
+    }
     if (this.hp <= 0) this.die();
     return true;
   }
+  /** Death reads in two beats: a 0.85 s out-of-control tumble shedding sparks, then the blast. */
   die() {
-    this.hp = 0; this.alive = false; this.deadT = 0; this.clearLocks();
-    fx.explosion(this.pos, 3, undefined, { debris: 20 }); fx.later(0.25, () => fx.explosion(tmp.copy(this.pos).add(new THREE.Vector3(2, 1, 0)), 2));
+    this.hp = 0; this.dying = 0.85; this.clearLocks(); this.charging = false; this.charge = 0; setCharge(0, false); this.beamFx.charge(tmp, 0, false, 0);
+    this.tumble.set(rand(-1, 1) * 6, rand(4, 7) * (Math.random() < 0.5 ? -1 : 1), rand(-1, 1) * 9);
+    slowmo(0.4, 0.9); sfx.alarm(); G.hud.warn('w_mechLost', 1.2);
+    fx.explosion(this.pos, 1.2, undefined, { debris: 6 });
+  }
+  explode() {
+    this.alive = false; this.deadT = 0; this.dying = 0;
+    fx.explosion(this.pos, 3, undefined, { debris: 24 }); fx.later(0.25, () => fx.explosion(tmp.copy(this.pos).add(new THREE.Vector3(2, 1, 0)), 2));
+    fx.light(this.pos, 0xffaa55, 260, 0.5); shake(1); flash(0.5, 1, 0.6, 0.3);
     slowmo(0.25, 1.6); this.root.visible = false; for (const r of this.ribbons) r.fading = true;
   }
   heal(n: number) { this.hp = Math.min(this.maxHp, this.hp + n); }
@@ -187,6 +261,26 @@ export class Player {
     const m = this.mech;
     this.invuln -= dt; this.meleeCamT -= dt; this.dodgeCd -= dt; this.comboT -= dt; this.bonusT -= dt; this.meleeCd -= dt; this.regenDelay -= dt;
     if (!this.alive) { this.deadT += G.realDt; return; }
+    if (this.dying > 0) {
+      // out of control: tumble, sink, shed sparks and smoke; the blast comes when the timer runs out
+      this.dying -= dt; this.root.rotation.x += this.tumble.x * dt; this.root.rotation.y += this.tumble.y * dt; this.root.rotation.z += this.tumble.z * dt;
+      this.pos.y -= (9 + (0.85 - this.dying) * 20) * dt; this.pos.x += this.vel.x * dt * 0.5;
+      if (Math.random() < 0.35) fx.sparks(this.pos, 8, 35, 3, 1.4, 0.4);
+      fx.smoke.emit(this.pos.x, this.pos.y, this.pos.z, rand(-2, 2), rand(0, 3), 10, 1.0, 1.2, 3.5, 0.25, 0.22, 0.22, 0.08, 0.08, 0.08, 0.7, 2, -1, 0, 0.6, 2);
+      if (Math.random() < 0.06) fx.explosion(tmp.copy(this.pos).add(tmp2.set(rand(-1.5, 1.5), rand(-1, 1), rand(-1, 1))), 0.6, undefined, { debris: 1, sound: Math.random() < 0.4 });
+      for (const f of this.mech.flames) f.scale.set(1, 1, Math.random() * 1.5);
+      if (this.dying <= 0) this.explode();
+      return;
+    }
+    // shield recharge; armor regen only trickles in once the shield is back up
+    this.shieldDelay -= dt; this.shieldHitT -= dt;
+    if (this.shieldDelay <= 0 && this.shield < this.maxShield) { const was = this.shield; this.shield = Math.min(this.maxShield, this.shield + 15 * dt); if (was <= 0) sfx.shieldUp(); }
+    // critical damage: smoke from the pack and stray sparks below 30% armor
+    if (this.hp < 30) {
+      this.critT -= dt; this.mech.flames[0].getWorldPosition(tmp);
+      if (Math.random() < 0.7) fx.smoke.emit(tmp.x + rand(-0.4, 0.4), tmp.y + 0.6, tmp.z, rand(-1, 1), rand(1, 3), 18, rand(0.6, 1.0), 0.5, 2.4, 0.18, 0.17, 0.17, 0.06, 0.06, 0.07, 0.55, 2, -1, 0, 0.6, 2);
+      if (this.critT <= 0) { this.critT = rand(0.25, 0.8); fx.sparks(tmp2.copy(this.pos).add(tmp.set(rand(-1, 1), rand(0, 1.2), rand(-0.5, 0.5))), 6, 25, 3, 1.6, 0.5); }
+    }
     const ctl = !this.auto && !G.cinematic && G.state === 'playing';
     // ---- input / movement
     let ix = 0, iy = 0;
@@ -200,7 +294,7 @@ export class Player {
     } else { this.boosting = false; }
     if (this.boostLock && (!isDown('boost') && this.energy > 20)) this.boostLock = false;
     if (!this.boosting) this.energy = Math.min(100, this.energy + (this.dodgeT > 0 ? 0 : 22) * dt);
-    if (this.regenDelay <= 0 && this.hp < this.maxHp) this.heal(2.5 * dt);
+    if (this.regenDelay <= 0 && this.hp < this.maxHp && this.shield >= this.maxShield) this.heal(1.5 * dt);
     const maxS = this.boosting ? 46 : 34;
     this.vel.x = damp(this.vel.x, ix * maxS, this.boosting ? 7 : 5.5, dt);
     this.vel.y = damp(this.vel.y, iy * maxS * 0.85, this.boosting ? 7 : 5.5, dt);
@@ -251,23 +345,44 @@ export class Player {
     for (const t of G.targetList as Target[]) { if (!t.alive || t.kind === 'hull' || t.pos.z > this.pos.z - 5) continue; toScreen(t.pos, scr); if (!scr.on) continue; const d = Math.hypot(scr.x - mouse.x, scr.y - mouse.y) - t.radius * 2; if (d < bd) { bd = d; this.aimTarget = t; } }
     if (this.aimTarget) this.aimPoint.copy(this.aimTarget.pos); else this.aimPoint.copy(this.ray.ray.origin).addScaledVector(this.ray.ray.direction, 320);
     // gamepad soft aim assist: gentle pull toward the nearest visible target near the reticle, plus friction over it
-    pad.friction = 1; this.lockRadius = device === 'pad' ? 250 : 200;
-    if (ctl && device === 'pad') {
-      let best: Target | null = null, bd2 = 140 * G.height / 1080, bx = 0, by = 0;
+    pad.friction = 1; this.lockRadius = device === 'pad' ? 250 : device === 'touch' ? 270 : 200;
+    if (ctl && device !== 'kb') {
+      const tch = device === 'touch';
+      let best: Target | null = null, bd2 = (tch ? 210 : 140) * G.height / 1080, bx = 0, by = 0;
       for (const t of G.targetList as Target[]) {
         if (!t.alive || t.kind === 'hull' || t.pos.z > this.pos.z - 5) continue; toScreen(t.pos, scr); if (!scr.on) continue;
         const d = Math.hypot(scr.x - mouse.x, scr.y - mouse.y) - (t.lockable ? 10 : 0); if (d < bd2) { bd2 = d; best = t; bx = scr.x; by = scr.y; }
       }
-      if (best) { const sm = Math.hypot(pad.rx, pad.ry); const k = (1 - Math.exp(-3.2 * (1 - 0.55 * sm) * dt)) * 0.65; mouse.x += (bx - mouse.x) * k; mouse.y += (by - mouse.y) * k; pad.friction = 0.55; }
+      if (best) { const sm = tch ? (touchStick.aiming ? 0.7 : 0) : Math.hypot(pad.rx, pad.ry); const k = (1 - Math.exp(-(tch ? 4.5 : 3.2) * (1 - 0.55 * sm) * dt)) * 0.65; mouse.x += (bx - mouse.x) * k; mouse.y += (by - mouse.y) * k; pad.friction = 0.55; }
     }
     // ---- fire
     this.fireT -= dt;
-    if (ctl && isDown('fire') && this.fireT <= 0 && this.meleeState !== 'lunge') {
+    const autoFire = device === 'touch' && !!this.aimTarget;
+    if (ctl && (isDown('fire') || autoFire) && this.fireT <= 0 && this.meleeState !== 'lunge' && !this.charging) {
       this.fireT = 1 / 13; m.gunTip.getWorldPosition(tmp);
       tmp2.copy(this.aimPoint).sub(tmp).normalize();
       this.bolts.fire(tmp, tmp2, this.bonusT > 0 ? 18 : 9); fx.muzzle(tmp); sfx.laser(); this.recoil = 1; this.fireIdle = 0;
       if (Math.random() < 0.3) fx.light(tmp, 0x66ccff, 30, 0.06);
     }
+    // ---- heavy beam: hold to charge (0.3 s minimum, full at 2 s), release to fire
+    this.beamCd -= dt;
+    if (ctl && isDown('charge') && this.beamCd <= 0 && this.meleeState !== 'lunge') {
+      if (!this.charging) { this.charging = true; this.charge = 0; }
+      const was = this.charge; this.charge = Math.min(this.chargeMax, this.charge + dt);
+      if (was < this.chargeMax && this.charge >= this.chargeMax) { sfx.beamReady(); G.hud.small('m_beamFull', 'ok'); fx.ring(m.gunTip.getWorldPosition(tmp), 0.5, 7, 0.3, 0.6, 2.2, 3.4); }
+      // intake: sparks stream into the muzzle from a shell around it
+      m.gunTip.getWorldPosition(tmp);
+      const n = this.charge >= this.chargeMax ? 3 : 1 + (Math.random() < this.charge / this.chargeMax ? 1 : 0);
+      for (let k = 0; k < n; k++) { const a = rand(0, 6.28), b = rand(-1, 1), r = rand(3, 5.5), l = rand(0.18, 0.28); const sx = Math.cos(a) * Math.sqrt(1 - b * b) * r, sy = b * r, sz = Math.sin(a) * Math.sqrt(1 - b * b) * r;
+        fx.add.emit(tmp.x + sx, tmp.y + sy, tmp.z + sz, -sx / l, -sy / l, -sz / l + G.speed * 0.02, l, 0.12, 0.35, 0.6, 2, 3.2, 1.5, 2.8, 4, 1, 0, 0, 0.05, 0, 1); }
+    }
+    if (this.charging && (!isDown('charge') || !ctl)) {
+      const c = this.charge; this.charging = false; this.charge = 0;
+      if (c >= 0.3 && ctl && this.alive) this.fireBeam(c);
+    }
+    m.gunTip.getWorldPosition(tmp); this.beamFx.charge(tmp, this.charging ? this.charge / this.chargeMax : 0, this.charge >= this.chargeMax, G.time);
+    this.beamFx.update(dt, G.time);
+    setCharge(this.charging ? this.charge / this.chargeMax : 0, this.charging);
     // ---- lock-on & missiles
     if (!this.missileReady) { this.reloadT -= dt; if (this.reloadT <= 0) { this.missileReady = true; G.hud.small('m_mslReady', 'ok'); } }
     for (const l of this.locks) l.age += dt; this.pruneLocks();
@@ -295,7 +410,7 @@ export class Player {
     this.root.rotation.set(pitch + this.lean - bkick * 0.18, aimYaw * 0.6 + this.extraYaw, bank + this.roll, 'YXZ');
     m.torso.rotation.x = damp(m.torso.rotation.x, -this.recoil * 0.06 + (this.boosting ? -0.12 : 0), 12, dt);
     // right arm: rifle up while firing / targeting, trails back in boost when idle
-    const aiming = this.fireIdle < 0.6 || !!this.aimTarget || !this.boosting;
+    const aiming = this.fireIdle < 0.6 || !!this.aimTarget || !this.boosting || this.charging;
     const armRx = aiming ? lerp(-1.25, -1.45, this.recoil) + aimPitch : 0.45;
     m.armR.rotation.x = damp(m.armR.rotation.x, armRx, aiming ? 16 : 5, dt); m.armR.rotation.z = damp(m.armR.rotation.z, aiming ? 0 : -0.15, 6, dt);
     m.armR.position.z = this.recoil * 0.25; m.shoulderR.rotation.x = -this.recoil * 0.18;
@@ -338,6 +453,30 @@ export class Player {
     // ghosts / slash
     for (const g of this.ghosts) if (g.t > 0) { g.t -= dt; g.mat.opacity = Math.max(0, g.t / 0.45) * 0.5; g.g.position.z += G.speed * 0.12 * dt; if (g.t <= 0) g.g.visible = false; }
     if (this.slash.visible) { this.slashT += dt; this.slashMat.uniforms.uA.value = Math.max(0, 1 - this.slashT / 0.22) * 2.2; this.slash.rotation.z -= dt * 9; if (this.slashT > 0.22) this.slash.visible = false; }
+  }
+  /** Pierces every target along the shot; damage 80→340 (×1.15 at full: one-shots a heavy) and width 1.4→4 scale with charge. */
+  fireBeam(c: number) {
+    const u = clamp((c - 0.3) / (this.chargeMax - 0.3), 0, 1), full = c >= this.chargeMax;
+    const dmg = lerp(80, 340, u) * (full ? 1.15 : 1) * (this.bonusT > 0 ? 1.5 : 1), w = lerp(1.4, 4, u), len = 1000;
+    const m = this.mech; m.gunTip.getWorldPosition(tmp);
+    const from = tmp.clone(), dir = tmp2.copy(this.aimTarget ? this.aimTarget.pos : this.aimPoint).sub(from).normalize().clone();
+    const to = from.clone().addScaledVector(dir, len);
+    let hits = 0;
+    for (const t of G.targetList as Target[]) {
+      if (!t.alive || t.kind === 'hull' || t.pos.z > this.pos.z - 2) continue;
+      if (!segSphere(from.x, from.y, from.z, to.x, to.y, to.z, t.pos, t.radius + w)) continue;
+      const at = new THREE.Vector3().subVectors(t.pos, from); const k = clamp(at.dot(dir), 0, len); at.copy(from).addScaledVector(dir, k);
+      t.hit(dmg, at, 'beam'); hits++;
+      fx.sparks(at, 30 + u * 40, 60, 1.2, 2.6, 4, dir); fx.ring(at, 1, 8 + u * 10, 0.3, 0.6, 2, 3.4); fx.explosion(at, 0.8 + u, undefined, { debris: 2, sound: false });
+    }
+    for (let i = 0; i < 4; i++) if (!G.enemies.shootMissiles(from.x, from.y, from.z, to.x, to.y, to.z)) break;
+    this.beamFx.fire(from, dir, len, w);
+    this.beamCd = this.beamCdMax * (0.6 + 0.4 * u); this.beamShots++; this.recoil = 2; this.fireIdle = 0;
+    sfx.heavyBeam(u); fx.light(from, 0x88eeff, 140 + u * 160, 0.25); fx.ring(from, 1, 6 + u * 8, 0.25, 0.8, 2.4, 3.6);
+    fx.muzzle(from, 1.5, 3, 4);
+    shake(0.25 + u * 0.55); flash(0.1 + u * 0.18, 0.5, 1.2, 1.6); G.trauma = Math.min(1.2, G.trauma + 0.1);
+    if (hits) hitstop(0.04 + u * 0.06);
+    if (full && hits >= 2) G.hud.small('m_beamPierce', 'ok', { n: hits });
   }
   findLockCandidate(): Target | null {
     let best: Target | null = null, bd = 1e9;

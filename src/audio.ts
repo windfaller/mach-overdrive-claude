@@ -1,6 +1,7 @@
 // Procedural Web Audio: every sound is synthesized, no assets.
 let ctx: AudioContext = null as any;
 let master: GainNode, sfxBus: GainNode, musicBus: GainNode, noiseBuf: AudioBuffer, verb: GainNode, sig: GainNode, drive: WaveShaperNode;
+let chgOsc1: OscillatorNode, chgOsc2: OscillatorNode, chgFilter: BiquadFilterNode, chgGain: GainNode;
 let engOsc1: OscillatorNode, engOsc2: OscillatorNode, engFilter: BiquadFilterNode, engGain: GainNode, windGain: GainNode, windFilter: BiquadFilterNode;
 const lastPlay: Record<string, number> = {};
 
@@ -36,7 +37,21 @@ export function initAudio() {
   windFilter = ctx.createBiquadFilter(); windFilter.type = 'bandpass'; windFilter.frequency.value = 800; windFilter.Q.value = 0.6;
   windGain = ctx.createGain(); windGain.gain.value = 0;
   wind.connect(windFilter); windFilter.connect(windGain); windGain.connect(sfxBus); wind.start();
+  // heavy-beam charge voice: always running, gated by gain; pitch rises 0.7 → 1.65 with charge
+  chgFilter = ctx.createBiquadFilter(); chgFilter.type = 'bandpass'; chgFilter.Q.value = 3; chgFilter.frequency.value = 600;
+  chgGain = ctx.createGain(); chgGain.gain.value = 0;
+  chgOsc1 = ctx.createOscillator(); chgOsc1.type = 'sawtooth'; chgOsc1.frequency.value = 154;
+  chgOsc2 = ctx.createOscillator(); chgOsc2.type = 'square'; chgOsc2.frequency.value = 308;
+  chgOsc1.connect(chgFilter); chgOsc2.connect(chgFilter); chgFilter.connect(chgGain); chgGain.connect(sfxBus);
+  chgOsc1.start(); chgOsc2.start();
   startMusic();
+}
+export function setCharge(level: number, on: boolean) {
+  if (!ctx) return; const t = now(), k = 0.7 + 0.95 * level, full = level >= 1;
+  chgOsc1.frequency.setTargetAtTime(220 * k, t, 0.04);
+  chgOsc2.frequency.setTargetAtTime(440 * k * (full ? 1.0 + 0.012 * Math.sin(t * 60) : 1.003), t, 0.02);
+  chgFilter.frequency.setTargetAtTime(500 + level * 3200, t, 0.05);
+  chgGain.gain.setTargetAtTime(on ? 0.035 + level * 0.06 : 0, t, on ? 0.03 : 0.02);
 }
 export const audioReady = () => !!ctx;
 export function setMasterMute(m: boolean) { if (master) master.gain.value = m ? 0 : 0.8; }
@@ -96,6 +111,19 @@ const proc = {
     impact(t, 0.7, 0.35, 0.3); noise(t, 0.3, 0.5, 'highpass', 2500, 800, 1, 0.001); osc('sawtooth', 1200, 200, t, 0.15, 0.08); },
   boost() { if (!ctx || !gate('boost', 300)) return; const t = now();
     impact(t, 0.45, 0.12, 0); noise(t, 0.8, 0.35, 'bandpass', 300, 3000, 1.2, 0.05); osc('sawtooth', 80, 240, t, 0.6, 0.08); },
+  /** Player heavy beam release: sub punch + driven noise sweep + bright zap, scaled by charge (0..1). */
+  heavyBeam(u = 1) { if (!ctx) return; const t = now(); const v = 0.5 + u * 0.5;
+    impact(t, 0.8 * v, 0.4 * v, 0.35);
+    const g = ctx.createGain(); g.gain.value = 1; g.connect(drive);
+    noise(t, 0.6 + u * 0.6, 0.55 * v, 'bandpass', 5000, 300, 1.4, 0.002, g);
+    osc('sawtooth', 1800, 120, t, 0.5 + u * 0.4, 0.12 * v, g); osc('square', 900, 60, t, 0.35, 0.06 * v);
+    osc('sine', 70, 28, t, 0.9 + u * 0.5, 0.7 * v, sig); },
+  shieldHit() { if (!ctx || !gate('shh', 60)) return; const t = now(); osc('sine', 1900, 700, t, 0.18, 0.07); noise(t, 0.12, 0.12, 'highpass', 4000, 2000, 1.5); osc('triangle', 420, 380, t, 0.2, 0.05); },
+  shieldBreak() { if (!ctx) return; const t = now(); impact(t, 0.5, 0.3, 0.2); [2400, 1800, 1200, 800].forEach((f, i) => osc('square', f, f * 0.6, t + i * 0.03, 0.15, 0.03)); noise(t, 0.6, 0.3, 'bandpass', 6000, 400, 2, 0.002, sig); },
+  shieldUp() { if (!ctx) return; const t = now(); [660, 880, 1320].forEach((f, i) => osc('sine', f, f * 1.01, t + i * 0.06, 0.2, 0.04)); },
+  /** radio open: squelch burst + two-tone chirp (hostile channels get a harsher, lower chirp) */
+  radio(hostile = false) { if (!ctx || !gate('radio', 200)) return; const t = now(); noise(t, 0.09, 0.08, 'bandpass', 2200, 1800, 3, 0.002); const f = hostile ? 520 : 1250; osc(hostile ? 'square' : 'sine', f, f, t + 0.05, 0.05, 0.03); osc(hostile ? 'square' : 'sine', f * 1.5, f * 1.5, t + 0.11, 0.06, 0.03); },
+  beamReady() { if (!ctx) return; const t = now(); [1318, 1760, 2637].forEach((f, i) => osc('triangle', f, f, t + i * 0.035, 0.18, 0.05)); },
   dodge() { if (!ctx) return; const t = now(); noise(t, 0.25, 0.25, 'bandpass', 3000, 600, 2, 0.01); },
   /** PERFECT DODGE: time-suck swell -> crystalline bell stack with shimmer -> sub drop, into the hall. */
   perfect() { if (!ctx) return; const t = now(), h = t + 0.22;

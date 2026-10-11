@@ -1,20 +1,25 @@
+/// <reference types="vite/client" />
 import * as THREE from 'three';
 import type { Mech } from './models';
+// authored hero meshes (remastered in Blender by tools/remaster_mech.py), inlined into the single-file build
+import playerGlb from './hero/player.glb?url';
+import ravenGlb from './hero/raven.glb?url';
+import heliosGlb from './hero/helios.glb?url';
 import { loadSamples } from './audio';
 
 /**
- * Hero asset manifest. Leave entries empty to use the procedural models (the default, always works).
+ * Hero asset manifest. The procedural models are the fallback whenever an entry is empty or fails to load (?hero=none forces them).
  * Drop authored files in /public/assets and point at them here, or override per run with
  * ?hero=player:assets/player.glb,raven:assets/raven.glb,helios:assets/helios.glb
  */
-export const HERO_ASSETS: { player?: string; raven?: string; helios?: string } = {};
+export const HERO_ASSETS: { player?: string; raven?: string; helios?: string } = { player: playerGlb, raven: ravenGlb, helios: heliosGlb };
 /** Optional wav/ogg replacements keyed by sfx name (laser, missile, lockTick, locked, melee, slashHit, boost, perfect, ...). */
 export const AUDIO_ASSETS: Record<string, string> = {};
 
 /** Node names the mapping layer looks for. Missing slots keep their procedural part. */
 export const MECH_SLOTS = {
   torso: 'torso', head: 'head', armL: 'leftArm', armR: 'rightArm', legL: 'leftLeg', legR: 'rightLeg', shinL: 'leftShin', shinR: 'rightShin',
-  wingL: 'leftWing', wingR: 'rightWing', pack: 'backpack',
+  wingL: 'leftWing', wingR: 'rightWing', pack: 'backpack', shoulderL: 'leftShoulder', shoulderR: 'rightShoulder', podGL: 'leftPod', podGR: 'rightPod',
 } as const;
 export const MECH_ANCHORS = { gunTip: 'gunMuzzle', podL: 'missilePodL', podR: 'missilePodR', blade: 'bladeAnchor', thrL: 'thrusterL', thrR: 'thrusterR', melee: 'meleeAnchor' } as const;
 /** HELIOS: module nodes (transform targets), weak point / core anchors, and optional groups. */
@@ -39,10 +44,14 @@ export function mapMech(mech: Mech, src: THREE.Object3D) {
   src.position.set(0, 0, 0); src.quaternion.identity(); src.scale.set(1, 1, 1); root.add(src);
   root.updateMatrixWorld(true);
   let used = 0;
+  const slotGroups = new Set(Object.keys(MECH_SLOTS).map(k => (mech as any)[k]).filter(Boolean));
   for (const [slot, name] of Object.entries(MECH_SLOTS)) {
     const node = find(src, name); const grp = (mech as any)[slot] as THREE.Object3D | undefined;
     if (!node || !grp) continue;
-    for (const c of grp.children) if (c.userData.proc) c.visible = false;
+    // hide this slot's procedural shell: its own meshes when the slot group is itself a proc part (head),
+    // otherwise its proc children, but never another slot's group (the head is a proc child of the torso)
+    if (grp.userData.proc) { for (const c of grp.children) if ((c as THREE.Mesh).isMesh) c.visible = false; }
+    else for (const c of grp.children) if (c.userData.proc && !slotGroups.has(c)) c.visible = false;
     grp.attach(node); used++;
   }
   // anchors: copy authored positions into the rig's anchor objects
@@ -64,7 +73,10 @@ export function mapHelios(mods: Record<string, { g: THREE.Group }>, anchors: { w
   for (const [slot, name] of Object.entries(HELIOS_SLOTS)) {
     const node = find(src, name); const m = mods[slot]; if (!node || !m) continue;
     for (const c of m.g.children) if (c.userData.proc) c.visible = false;
-    m.g.attach(node); used++;
+    // remastered modules (tools/dump-helios.ts) are authored in module space; anything else in ship space
+    if (node.userData.local) { node.removeFromParent(); node.position.set(0, 0, 0); node.quaternion.identity(); node.scale.set(1, 1, 1); m.g.add(node); }
+    else m.g.attach(node);
+    used++;
   }
   const wk = [HELIOS_ANCHORS.weak0, HELIOS_ANCHORS.weak1, HELIOS_ANCHORS.weak2];
   wk.forEach((n, i) => { const a = find(src, n) || find(root, n); const t = anchors.weak[i]; if (a && t && t.parent) t.position.copy(t.parent.worldToLocal(a.getWorldPosition(new THREE.Vector3()))); });
@@ -75,6 +87,7 @@ export function mapHelios(mods: Record<string, { g: THREE.Group }>, anchors: { w
 
 function overrides() {
   const q = new URLSearchParams(location.search).get('hero'); const out: Record<string, string> = { ...HERO_ASSETS } as any;
+  if (q === 'none') return {} as Record<string, string>; // ?hero=none: procedural blockouts only
   if (q) for (const kv of q.split(',')) { const [k, v] = kv.split(':'); if (k && v) out[k] = v; }
   return out;
 }
@@ -93,7 +106,7 @@ export async function loadHeroAssets(ctx: { player: any; enemies: any; boss: any
       if (k === 'player') ctx.player.applyHeroModel(g.scene);
       else if (k === 'raven') ctx.enemies.applyRavenModel(g.scene);
       else if (k === 'helios') ctx.boss.applyHeroModel(g.scene, g.animations);
-      console.info(`[hero] ${k} loaded from ${list[k]}`);
+      console.info(`[hero] ${k} loaded from ${list[k].startsWith('data:') ? 'bundle' : list[k]}`);
     } catch (e) { console.warn(`[hero] ${k} failed, keeping procedural model`, e); }
   }));
 }

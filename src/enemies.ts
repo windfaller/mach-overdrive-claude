@@ -26,7 +26,10 @@ export class Enemy implements Target {
   hit(dmg: number, p: THREE.Vector3, src: string) {
     if (!this.alive) return;
     if (this.kind === 'elite' && src === 'laser' && this.d.state === 'evade') dmg *= 0.3;
+    if (this.kind === 'elite' && this.d.state === 'limit') dmg *= 0.1;
     this.hp -= dmg; this.flashT = 0.07;
+    // RAVEN phase 2: at half armor it releases its limiter (brief armored flare) and fights 30% faster
+    if (this.kind === 'elite' && !this.d.p2 && this.hp < this.maxHp * 0.5 && this.hp > 0) G.enemies.ravenLimit(this);
     if (src === 'laser') { fx.sparks(p, 6, 28, 3, 1.6, 0.6); sfx.hit(); }
     if (this.kind === 'elite' && src === 'laser' && Math.random() < 0.12 && this.d.dodgeCd <= 0) G.enemies.eliteEvade(this);
     if (this.hp <= 0) G.enemies.kill(this, src);
@@ -110,6 +113,7 @@ export class Enemies {
       for (const r of this.rRibs) if (r) r.fading = true; this.rRibs = [];
       if (G.camRig && G.camRig.owner === 'raven') { G.camRig = null; G.cinematic = false; }
     }
+    if (e.kind === 'elite' && G.comms) G.comms.say('c1f', true);
     if (e.kind === 'heavy' || e.kind === 'elite') {
       for (let i = 0; i < (e.kind === 'elite' ? 6 : 3); i++) { const p = e.pos.clone().add(new THREE.Vector3(rand(-5, 5), rand(-4, 4), rand(-4, 4))); fx.later(0.12 + i * 0.12, () => fx.explosion(p, 1.4)); }
     }
@@ -206,7 +210,10 @@ export class Enemies {
       else if (e.age < (d.stay || 40)) {
         const t = e.age; e.pos.x = damp(e.pos.x, d.station.x + Math.sin(t * 0.4) * 14, 1.5, dt); e.pos.y = damp(e.pos.y, d.station.y + Math.sin(t * 0.7) * 5, 1.5, dt);
         d.fire = (d.fire ?? 2) - dt;
-        if (d.fire <= 0 && d.shoot) { d.fire = 3.2; d.alt = !d.alt;
+        // telegraph: hot orange ring and a pulsing core 0.7 s before each volley
+        if (d.shoot && d.fire < 0.7 && !d.tw) { d.tw = true; fx.ring(e.pos, 1, 15, 0.55, 3, 1.1, 0.15, true, 0.9); sfx.charge(0.5); }
+        if (d.tw && d.fire > 0) { const k = 1 - d.fire / 0.7; if (Math.random() < 0.6) fx.add.emit(e.pos.x + rand(-3, 3), e.pos.y + rand(-3, 3), e.pos.z + 3, 0, 0, 0, 0.15, 0.8 + k * 2, 0.2, 3, 1.2 * k, 0.2, 3, 0.4, 0.1, 1, 0, 0, 0, 0, 1); }
+        if (d.fire <= 0 && d.shoot) { d.fire = 3.2; d.alt = !d.alt; d.tw = false;
           if (d.alt) { for (let k = -3; k <= 3; k++) { tmp.copy(P).sub(e.pos).normalize(); tmp.x += k * 0.07; this.fireOrbDir(e.pos, tmp, 70, 10, true); } }
           else for (let k = 0; k < 4; k++) this.fireMissile(e.pos, tmp.set((k - 1.5) * 30, 30, 10), 1.8);
         }
@@ -217,15 +224,29 @@ export class Enemies {
       if (e.kind === 'fighter') e.mesh.rotateZ(clamp(-e.vel.x * 0.02, -0.9, 0.9));
     }
   }
+  ravenLimit(e: Enemy) {
+    const d = e.d, m = e.mech!; d.p2 = true; d.state = 'limit'; d.t = 0; m.blade.visible = false;
+    G.hud.big('b_ravenLimit', 'boss', 1.8); G.comms && G.comms.say('c1e', true); G.hud.warn('w_ravenLimit', 1.6); sfx.ravenWarn(); sfx.shieldBreak();
+    fx.ring(e.pos, 2, 40, 0.6, 3, 0.3, 1.2); fx.ring(e.pos, 1, 22, 0.4, 4, 2, 3); fx.light(e.pos, 0xff3a8a, 200, 0.6); shake(0.6); flash(0.2, 1, 0.2, 0.5); slowmo(0.35, 0.5);
+    G.player.clearLocks();
+  }
   eliteAI(e: Enemy, dt: number) {
-    const d = e.d, P = G.player.pos, m = e.mech!; d.t += dt; d.dodgeCd -= dt;
+    const d = e.d, P = G.player.pos, m = e.mech!; d.t += dt * (d.p2 && d.state !== 'limit' ? 1.3 : 1); d.dodgeCd -= dt;
+    if (d.state === 'limit') {
+      // limiter release: hover in place, glow ramps to white-hot, sheds ghosts; nearly invulnerable for 1.2 s
+      const k = clamp(d.t / 1.2, 0, 1); m.glowMat.color.setRGB(3 + 6 * k, 0.25 + 2 * k, 0.7 + 3 * k);
+      this.ghostT -= dt; if (this.ghostT <= 0) { this.ghostT = 0.08; this.ravenGhost(e, 0.5); }
+      if (Math.random() < 0.8) fx.add.emit(e.pos.x + rand(-2, 2), e.pos.y + rand(-2, 2), e.pos.z, rand(-20, 20), rand(-20, 20), rand(-10, 10), 0.4, 1.5, 0.2, 3, 0.4, 1.2, 1, 0.1, 0.4, 1, 1, 0, 0.03, 0, 1);
+      if (d.t > 1.2) { d.state = 'strafe'; d.t = 0; m.glowMat.color.setRGB(4.5, 0.4, 1.2); }
+      return;
+    }
     const goto = (target: THREE.Vector3, k: number) => { e.pos.x = damp(e.pos.x, target.x, k, dt); e.pos.y = damp(e.pos.y, target.y, k, dt); e.pos.z = damp(e.pos.z, target.z, k, dt); };
     if (d.state === 'enter') {
       // 2.6 s entrance: drop in on a long lens, flare, name card, then hand control back
       const u = easeOut(clamp(d.t / 2.2, 0, 1)); e.pos.lerpVectors(tmp.set(0, 70, -420), tmp2.set(0, 8, -70), u);
       if (!d.cine) { d.cine = true; G.cinematic = true; sfx.ravenWarn(); }
       this.camP.set(P.x - 2.2, P.y + 0.9, P.z + 7.5); this.camL.copy(e.pos); G.camRig = { pos: this.camP, look: this.camL, fov: lerp(28, 46, u), owner: 'raven' };
-      if (d.t > 1.5 && !d.flare) { d.flare = true; G.hud.big('b_raven', 'boss', 2); m.glowMat.color.setRGB(9, 1, 2.5); fx.ring(e.pos, 2, 30, 0.5, 3, 0.4, 1); shake(0.4); sfx.boost(); }
+      if (d.t > 1.5 && !d.flare) { d.flare = true; G.hud.big('b_raven', 'boss', 2); G.comms && G.comms.say('c1d', true); m.glowMat.color.setRGB(9, 1, 2.5); fx.ring(e.pos, 2, 30, 0.5, 3, 0.4, 1); shake(0.4); sfx.boost(); }
       if (d.flare) m.glowMat.color.lerp(RAVEN_GLOW, 1 - Math.exp(-3 * dt));
       if (Math.random() < 0.9) { m.flames[0].getWorldPosition(tmp); fx.add.emit(tmp.x, tmp.y, tmp.z, 0, 60, 30, 0.3, 2.5, 0.4, 3, 0.5, 1, 1, 0.1, 0.3, 0.9, 1, 0, 0.03, 0, 1); }
       if (d.t > 2.6) { d.state = 'strafe'; d.t = 0; this.rRibs = m.flames.map(f => { const r = fx.ribbon(); f.getWorldPosition(tmp); if (r) r.start(tmp.x, tmp.y, tmp.z, 0.16, 2.6, 0.35, 0.9, 0.45, 1); return r; }); if (G.camRig && G.camRig.owner === 'raven') G.camRig = null; G.cinematic = false; }
