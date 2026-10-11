@@ -7,12 +7,15 @@ import { sfx } from './audio';
 
 const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), look = new THREE.Object3D(); const RAVEN_GLOW = new THREE.Color(3, 0.25, 0.7);
 const STATS: Record<string, { hp: number; r: number; locks: number; score: number; boom: number }> = {
-  drone: { hp: 16, r: 2.2, locks: 1, score: 100, boom: 1.1 },
-  fighter: { hp: 40, r: 2.6, locks: 1, score: 200, boom: 1.4 },
-  heavy: { hp: 320, r: 4.8, locks: 3, score: 800, boom: 2.6 },
-  elite: { hp: 1100, r: 3.6, locks: 3, score: 3000, boom: 3 },
+  drone: { hp: 16, r: 3.0, locks: 1, score: 100, boom: 1.1 },
+  fighter: { hp: 40, r: 3.4, locks: 1, score: 200, boom: 1.4 },
+  heavy: { hp: 320, r: 6.0, locks: 3, score: 800, boom: 2.6 },
+  elite: { hp: 1100, r: 4.6, locks: 3, score: 3000, boom: 3 },
   shipcore: { hp: 650, r: 9, locks: 6, score: 5000, boom: 4 },
 };
+
+/** On-screen size per type, tuned so each reads at combat range; hit radii in STATS grow with it. */
+const VIS_SCALE: Record<string, number> = { drone: 1.7, fighter: 1.75, heavy: 1.3 };
 
 export class Enemy implements Target {
   kind: string; mesh: THREE.Group; pos: THREE.Vector3; vel = new THREE.Vector3(); hp = 1; maxHp = 1; radius = 2; alive = false;
@@ -53,7 +56,7 @@ export class Enemies {
     mk('drone', 40, () => buildDrone(gD));
     mk('fighter', 14, () => { const g = new THREE.Group(); g.add(buildFighter(gF)); return g; });
     mk('heavy', 6, () => { const g = new THREE.Group(); g.add(buildHeavy(gH)); return g; });
-    mk('elite', 1, () => { const m = buildMech([3, 0.25, 0.7], mats.dark, mats.enemyMid, [3, 0.4, 0.8], 'raven'); m.root.scale.setScalar(1.5); m.root.rotation.y = Math.PI; const g = new THREE.Group(); g.add(m.root); (g as any).mech = m; return g; });
+    mk('elite', 1, () => { const m = buildMech([3, 0.25, 0.7], mats.dark, mats.enemyMid, [3, 0.4, 0.8], 'raven'); m.root.scale.setScalar(2.0); m.root.rotation.y = Math.PI; const g = new THREE.Group(); g.add(m.root); (g as any).mech = m; return g; });
     const e = this.pools.elite[0]; e.mech = (e.mesh as any).mech; this.buildRavenGhosts();
     // orbs
     const om = new THREE.MeshBasicMaterial(); om.color.setRGB(4, 0.9, 0.35);
@@ -94,7 +97,7 @@ export class Enemies {
   spawn(kind: string, d: any = {}): Enemy | null {
     const e = this.pools[kind].find(x => !x.alive && !this.active.includes(x)); if (!e) return null;
     const s = STATS[kind]; e.hp = e.maxHp = s.hp * (d.hpMul || 1); e.radius = s.r; e.maxLocks = s.locks; e.locks = 0; e.age = 0; e.alive = true; e.lockable = true;
-    e.d = { ...d, shoot: d.shoot ?? true }; e.vel.set(0, 0, 0); e.flashT = 0; e.mesh.visible = true; e.mesh.scale.setScalar(kind === 'drone' || kind === 'fighter' ? 1.3 : 1);
+    e.d = { ...d, shoot: d.shoot ?? true }; e.vel.set(0, 0, 0); e.flashT = 0; e.mesh.visible = true; e.mesh.scale.setScalar(VIS_SCALE[kind] ?? 1);
     if (d.from) e.pos.copy(d.from); else e.pos.set(0, 0, -500);
     if (kind === 'elite') {
       e.d.state = 'enter'; e.d.t = 0; e.d.dodgeCd = 0; e.d.atk = 0; e.d.target = new THREE.Vector3(0, 6, -60);
@@ -252,7 +255,7 @@ export class Enemies {
       if (d.t > 2.6) { d.state = 'strafe'; d.t = 0; this.rRibs = m.flames.map(f => { const r = fx.ribbon(); f.getWorldPosition(tmp); if (r) r.start(tmp.x, tmp.y, tmp.z, 0.16, 2.6, 0.35, 0.9, 0.45, 1); return r; }); if (G.camRig && G.camRig.owner === 'raven') G.camRig = null; G.cinematic = false; }
     }
     else if (d.state === 'strafe') {
-      if (d.t > 1.6 || !d.tp) { d.tp = new THREE.Vector3(rand(-26, 26), rand(-8, 16), rand(-85, -55)); if (d.t > 1.6) { d.t = 0; d.atk++; d.state = ['rifle', 'missiles', 'melee', 'rifle', 'melee'][d.atk % 5]; } }
+      if (d.t > 1.6 || !d.tp) { d.tp = new THREE.Vector3(rand(-24, 24), rand(-6, 14), rand(-62, -40)); if (d.t > 1.6) { d.t = 0; d.atk++; d.state = ['rifle', 'missiles', 'melee', 'rifle', 'melee'][d.atk % 5]; } }
       goto(d.tp, 3);
     } else if (d.state === 'evade') {
       e.pos.x += d.evDir * 90 * (1 - d.t / 0.35) * dt; this.ghostT -= dt; if (this.ghostT <= 0) { this.ghostT = 0.05; this.ravenGhost(e, 0.45); } if (Math.random() < 0.6) { fx.add.emit(e.pos.x, e.pos.y, e.pos.z, 0, 0, 0, 0.3, 4, 1, 3, 0.3, 0.8, 1, 0.1, 0.3, 0.6, 0, 0, 0, 0.3, 0); }

@@ -11,17 +11,22 @@ export const B = (l: L, w: number, h: number, d: number, x = 0, y = 0, z = 0, rx
 export const C = (l: L, rt: number, rb: number, h: number, seg: number, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { l.push(place(new THREE.CylinderGeometry(rt, rb, h, seg), x, y, z, rx, ry, rz)); };
 export const S = (l: L, r: number, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) => { const g = new THREE.IcosahedronGeometry(r, 1); g.scale(sx, sy, sz); l.push(place(g, x, y, z, 0, 0, 0)); };
 export const T = (l: L, r: number, tube: number, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { l.push(place(new THREE.TorusGeometry(r, tube, 6, 24), x, y, z, rx, ry, rz)); };
+/** Flat two-sided-ready triangle with the same attribute set as the primitives (position, normal, uv) so it merges. */
+export const tri = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) => {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([...a.toArray(), ...b.toArray(), ...c.toArray()], 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2)); g.computeVertexNormals(); return g;
+};
 export const merge = (l: L) => { const g = mergeGeometries(l, false); l.forEach(x => x.dispose()); return g; };
 
 export const mats = {
   dark: new THREE.MeshStandardMaterial({ color: 0x323846, metalness: 0.8, roughness: 0.3, envMapIntensity: 1.4 }),
   mid: new THREE.MeshStandardMaterial({ color: 0x4a5160, metalness: 0.75, roughness: 0.4, envMapIntensity: 1.0 }),
   light: new THREE.MeshStandardMaterial({ color: 0x9aa3b4, metalness: 0.55, roughness: 0.35, envMapIntensity: 1.2 }),
-  enemyDark: new THREE.MeshStandardMaterial({ color: 0x3a2f2b, metalness: 0.7, roughness: 0.4, envMapIntensity: 1.0 }),
-  enemyMid: new THREE.MeshStandardMaterial({ color: 0x7a5a4c, metalness: 0.6, roughness: 0.45 }),
+  enemyDark: new THREE.MeshStandardMaterial({ color: 0x4e3a32, metalness: 0.65, roughness: 0.38, envMapIntensity: 1.2 }),
+  enemyMid: new THREE.MeshStandardMaterial({ color: 0x9a7460, metalness: 0.55, roughness: 0.42, envMapIntensity: 1.1 }),
 };
 /** Readability: a view-angle rim glow so hostile hulls separate from the dark, busy city. Warm = hostile. */
-export const ENEMY_RIM = [1.5, 0.42, 0.12], RAVEN_RIM = [1.7, 0.18, 0.55];
+export const ENEMY_RIM = [2.4, 0.7, 0.2], RAVEN_RIM = [2.6, 0.3, 0.9];
 export function addRim(m: THREE.MeshStandardMaterial, rgb: number[], pow = 2.2) {
   const col = new THREE.Color(rgb[0], rgb[1], rgb[2]);
   m.onBeforeCompile = s => {
@@ -203,36 +208,58 @@ export function buildMech(glowRGB: number[], md: THREE.Material = mats.dark, mm:
     wingL, wingR, blade, gunTip, flames, footFlames, podL, podR, glowMat: gm, variant };
 }
 
+// Enemy silhouettes are built to read at 60-150 m against the city: each type owns one shape and one glow colour.
+// Drone = round sentinel with a big eye and an X of fins; fighter = long arrowhead with forked tails;
+// heavy = squat gunship with two oversized cannons and a hot core.
 export function buildDrone(gm: THREE.Material) {
   const g = new THREE.Group();
   const core = part((d, m, gl) => {
-    const o = new THREE.OctahedronGeometry(1, 0); o.scale(1.2, 0.75, 1.3); d.push(o.index ? o.toNonIndexed() : o);
-    S(gl, 0.36, 0, 0, 1.05); B(m, 0.5, 0.25, 1.6, 0, 0.55, -0.3);
-    for (const s of [-1, 1]) { B(d, 1.4, 0.08, 0.6, s * 1.1, 0, -0.2, 0, s * 0.3, s * 0.25); B(gl, 1.3, 0.05, 0.05, s * 1.1, 0.02, 0.1, 0, s * 0.3, s * 0.25); }
+    // armoured clam shell split by a glowing seam, big forward eye
+    S(d, 1.05, 0, 0.18, 0, 1.15, 0.62, 1.15); S(d, 1.05, 0, -0.2, 0, 1.15, 0.55, 1.15);
+    B(gl, 2.25, 0.07, 2.25, 0, 0, 0, 0, Math.PI / 4, 0);
+    S(gl, 0.5, 0, 0, 1.0, 1, 1, 0.55); T(m, 0.62, 0.1, 0, 0, 0.95);
+    // X fins: long blades with hot tips, the shape that tells a drone from everything else
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI / 4 + i * Math.PI / 2, cx = Math.cos(a), cy = Math.sin(a);
+      B(m, 2.1, 0.12, 0.7, cx * 1.75, cy * 1.75, -0.25, 0, 0, a); B(gl, 0.35, 0.18, 0.75, cx * 2.85, cy * 2.85, -0.25, 0, 0, a);
+    }
+    B(d, 0.5, 0.5, 1.2, 0, 0, -1.05);
   }, mats.enemyDark, mats.enemyMid, gm);
-  const ring = part((d, m, gl) => { T(m, 1.55, 0.09, 0, 0, 0, Math.PI / 2); for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; B(gl, 0.18, 0.12, 0.18, Math.cos(a) * 1.55, 0, Math.sin(a) * 1.55); } }, mats.enemyDark, mats.enemyMid, gm);
+  const ring = part((d, m, gl) => { T(m, 1.6, 0.08, 0, 0, -0.25); for (let i = 0; i < 3; i++) { const a = i / 3 * Math.PI * 2; B(gl, 0.22, 0.22, 0.22, Math.cos(a) * 1.6, Math.sin(a) * 1.6, -0.25); } }, mats.enemyDark, mats.enemyMid, gm);
   ring.name = 'spin'; g.add(core, ring); return g;
 }
 export function buildFighter(gm: THREE.Material) {
   return part((d, m, g) => {
-    C(d, 0.0, 0.6, 3.8, 6, 0, 0, 0.6, Math.PI / 2); B(d, 0.9, 0.5, 2.4, 0, 0, -1.0);
+    // needle nose + long fuselage
+    C(d, 0.0, 0.55, 3.2, 6, 0, 0, 2.1, Math.PI / 2); B(d, 1.0, 0.6, 3.0, 0, 0, -0.9); B(g, 0.35, 0.22, 1.1, 0, 0.38, 0.9);
     for (const s of [-1, 1]) {
-      B(d, 2.4, 0.08, 1.3, s * 1.3, 0, -1.0, 0, s * 0.45, 0); B(g, 2.2, 0.05, 0.06, s * 1.4, 0.03, -0.45, 0, s * 0.45, 0);
-      B(m, 0.06, 0.9, 0.9, s * 0.45, 0.45, -1.8, 0, 0, s * 0.35); C(g, 0.26, 0.26, 0.1, 8, s * 0.3, 0, -2.25, Math.PI / 2);
+      // big swept delta, lit along the leading edge so the arrowhead shape reads at range
+      const a = new THREE.Vector3(s * 0.45, 0, 1.0), b = new THREE.Vector3(s * 3.6, 0, -1.9), c = new THREE.Vector3(s * 0.45, 0, -2.0);
+      d.push(tri(a, b, c), tri(a, c, b));
+      const le = new THREE.Vector3(s * 3.6 - s * 0.45, 0, -2.9); B(g, 0.12, 0.1, le.length(), s * 2.02, 0.04, -0.45, 0, Math.atan2(le.x, le.z), 0);
+      B(m, 0.5, 0.06, 0.9, s * 3.5, 0, -2.0); B(g, 0.08, 0.08, 0.9, s * 3.75, 0, -2.0);
+      // forked tail booms
+      B(m, 0.08, 1.3, 1.1, s * 0.75, 0.6, -2.0, 0, 0, s * 0.42); B(g, 0.06, 0.06, 1.0, s * 1.02, 1.18, -2.1, 0, 0, s * 0.42);
+      C(g, 0.3, 0.3, 0.12, 10, s * 0.32, 0, -2.45, Math.PI / 2);
+      // canards
+      B(m, 0.9, 0.05, 0.45, s * 0.85, 0.05, 1.3, 0, s * -0.3, 0);
     }
-    B(g, 0.3, 0.16, 0.7, 0, 0.32, 0.4);
   }, mats.enemyDark, mats.enemyMid, gm);
 }
 export function buildHeavy(gm: THREE.Material) {
   return part((d, m, g) => {
-    C(d, 2.2, 2.7, 3.6, 6, 0, 0, 0, Math.PI / 2, 0, 0);
+    // hex hull with an armoured brow and a big exposed reactor
+    C(d, 2.2, 2.7, 3.6, 6, 0, 0, 0, Math.PI / 2, 0, 0); B(m, 3.6, 1.1, 3.0, 0, 2.2, 0.2, -0.15, 0, 0);
+    S(g, 1.05, 0, 0, 1.75, 1, 1, 0.5); T(m, 1.35, 0.2, 0, 0, 1.85);
+    for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2 + 0.5; B(g, 0.3, 0.3, 0.12, Math.cos(a) * 2.0, Math.sin(a) * 2.0, 1.85); }
     for (const s of [-1, 1]) {
-      B(m, 1.1, 3.0, 3.2, s * 2.8, 0, 0); B(d, 0.7, 0.7, 3.4, s * 2.8, -1.9, 1.0); B(g, 0.35, 0.35, 0.1, s * 2.8, -1.9, 2.72);
-      B(g, 0.08, 2.4, 0.08, s * 3.36, 0, 1.0); B(d, 1.4, 1.0, 1.4, s * 2.8, 1.9, -0.4);
+      // oversized twin cannons: the silhouette cue for "this one hits hard"
+      B(m, 1.4, 3.2, 3.6, s * 3.0, 0, 0); B(d, 1.0, 1.0, 5.2, s * 3.0, -1.2, 2.0); C(d, 0.55, 0.55, 1.2, 8, s * 3.0, -1.2, 4.8, Math.PI / 2);
+      C(g, 0.4, 0.4, 0.1, 10, s * 3.0, -1.2, 5.42, Math.PI / 2); B(g, 0.1, 2.8, 0.1, s * 3.72, 0, 1.0);
+      B(d, 1.6, 1.2, 1.6, s * 3.0, 2.0, -0.4); B(g, 1.2, 0.1, 0.1, s * 3.0, 2.62, 0.4);
+      B(m, 0.5, 2.0, 0.5, s * 1.6, -2.4, -0.8, 0, 0, s * 0.3);
     }
-    S(g, 0.75, 0, 0, 1.75, 1, 1, 0.5);
-    for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2 + 0.5; B(g, 0.22, 0.22, 0.1, Math.cos(a) * 1.5, Math.sin(a) * 1.5, 1.85); }
-    B(m, 2.0, 0.5, 2.6, 0, 2.3, -0.3); T(m, 2.9, 0.12, 0, 0, -0.6);
+    T(m, 3.1, 0.14, 0, 0, -0.6); B(g, 2.6, 0.12, 0.12, 0, -2.3, 1.3);
   }, mats.enemyDark, mats.enemyMid, gm);
 }
 export function buildBattleshipHalf(sign: number, gm: THREE.Material) {
@@ -242,6 +269,9 @@ export function buildBattleshipHalf(sign: number, gm: THREE.Material) {
     B(d, 86, 16, 26, s * 43, 0, 0); B(m, 80, 3, 20, s * 43, 9, 0);
     for (const y of [-4, 3]) { B(g, 80, 0.4, 0.3, s * 43, y, 13.2); }
     for (let i = 0; i < 18; i++) B(g, 1.2, 0.8, 0.2, s * (6 + i * 4.4), -0.5, 13.15);
+    // armour belt and keel fins break up the slab; turret batteries along the deck read as "warship" at range
+    B(m, 84, 4, 1.2, s * 43, -5, 13.4); B(d, 70, 6, 6, s * 40, -10, 0); B(g, 70, 0.5, 0.5, s * 40, -13.2, 3);
+    for (let i = 0; i < 4; i++) { const x = s * (14 + i * 18); C(m, 3.2, 3.6, 2.4, 8, x, 11.6, 4); B(d, 0.8, 0.8, 8, x - 0.9, 12.2, 9); B(d, 0.8, 0.8, 8, x + 0.9, 12.2, 9); C(g, 1.2, 1.2, 0.3, 8, x, 13, 4); }
     if (s > 0) {
       const c = new THREE.CylinderGeometry(0.5, 13, 36, 4); c.rotateY(Math.PI / 4); c.rotateZ(-Math.PI / 2); c.scale(1, 0.7, 1); c.translate(104, 0, 0); d.push(c.toNonIndexed());
       B(m, 22, 10, 12, 26, 12, 0); B(g, 18, 1, 0.3, 26, 13, 6.2); B(d, 8, 4, 8, 50, 10, 0); B(m, 14, 1.2, 1.2, 58, 11, 0);
