@@ -12,7 +12,8 @@ const which = process.argv[2] || 'all';
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'] });
 let failures = 0;
 const log = (...a) => console.log(...a);
-const fail = (name, msg) => { failures++; log(`  ✗ ${name}: ${msg}`); };
+// on GitHub Actions each failure is also an annotation, so it can be read from the checks API without the raw log
+const fail = (name, msg) => { failures++; log(`  ✗ ${name}: ${msg}`); if (process.env.GITHUB_ACTIONS) console.log(`::error title=smoke ${name}::${String(msg).replace(/\r?\n/g, ' ').slice(0, 900)}`); };
 
 async function open(query, init, base = url) {
   const page = await browser.newPage({ viewport: { width: 800, height: 450 } });
