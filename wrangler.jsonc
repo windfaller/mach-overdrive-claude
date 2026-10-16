@@ -1,7 +1,7 @@
 // Cloudflare Workers static-assets deploy. Build: `npm run build`; deploy: `npx wrangler deploy`.
 // Having this file stops Wrangler's auto-configuration (which requires Vite >= 6).
 {
-  "name": "mach-overdrive-claude",
+  "name": "mach-overdrive",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./dist",
