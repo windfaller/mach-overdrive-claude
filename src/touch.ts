@@ -111,7 +111,9 @@ export function initTouch(force: boolean) {
   addEventListener('blur', releaseAll); addEventListener('resize', resize);
   document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
   onI18n(relabel); resize(); relabel();
-  if (force) setDevice('touch');
+  // phones and tablets start in touch mode so the title shows touch controls before the first tap
+  const coarseOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  if (force || coarseOnly) setDevice('touch');
 }
 
 /** Per-frame: show the overlay only in play, and mirror weapon state on the buttons. */
