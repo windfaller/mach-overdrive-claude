@@ -4,6 +4,7 @@ import { buildCarrier, buildBattleshipHalf, glow, additive } from './models';
 import { fx } from './fx';
 
 const SPAN = 1800, FAR = -1700, NEAR = 80;
+const LANE_CLEAR = 40;
 
 // ---------- atmosphere presets ----------
 type Atmo = { fog: number; dens: number; top: number; hor: number; bot: number; sun: number; sunDir: number[]; hemiS: number; hemiG: number; hemiI: number; dir: number; dirI: number; line: number; stars: number; exp: number };
@@ -46,16 +47,24 @@ void main(){ vec3 n = normalize(vN); vec2 f;
     float bands = fract(vSeed * 7.13);
     vec2 cs = bands > 0.5 ? vec2(4.0, 5.0) : vec2(2.6, 4.0);
     vec2 cell = floor(f / cs); vec2 g = fract(f / cs);
-    float win = step(0.18, g.x) * step(g.x, 0.82) * step(0.22, g.y) * step(g.y, 0.78);
+    // anti-aliased window grid: soft edges sized to the pixel footprint, and once a cell shrinks below a few
+    // pixels the per-cell on/off pattern is replaced by its average so distant facades stop crawling
+    vec2 fw = fwidth(f / cs); float foot = max(fw.x, fw.y);
+    vec2 wa = smoothstep(vec2(0.18, 0.22) - fw, vec2(0.18, 0.22) + fw, g) * (1.0 - smoothstep(vec2(0.82, 0.78) - fw, vec2(0.82, 0.78) + fw, g));
+    float win = wa.x * wa.y;
+    float thr = 0.72 - 0.18 * fract(vSeed * 3.7);
     float r = hh(cell + vSeed * 31.0);
-    float on = step(0.72 - 0.18 * fract(vSeed * 3.7), r);
+    float on = step(thr, r);
     vec3 wc = mix(uW1, uW2, step(0.86, r)) * (0.25 + 0.75 * hh(cell + 7.3));
-    col += win * on * wc;
-    float strip = step(0.97, fract(f.x / 9.0 + vSeed)) * step(0.6, fract(vSeed * 11.0));
+    vec3 avgW = mix(uW1, uW2, 0.14) * 0.625 * (1.0 - thr) * 0.36;
+    float detail = 1.0 - smoothstep(0.18, 0.45, foot);
+    col += mix(avgW, win * on * wc, detail);
+    float sx = fract(f.x / 9.0 + vSeed); float sw = fwidth(f.x / 9.0);
+    float strip = mix(0.03, smoothstep(0.97 - sw, 0.97 + sw, sx), 1.0 - smoothstep(0.015, 0.05, sw)) * step(0.6, fract(vSeed * 11.0));
     col += strip * uEdge * 1.6;
     float top = smoothstep(2.0, 0.0, vSc.y - vL.y) * step(0.35, fract(vSeed * 5.3));
     col += top * uEdge * 2.2;
-    float ad = step(0.82, fract(vSeed * 13.7)) * step(abs(vL.y - vSc.y * fract(vSeed * 2.9) * 0.8 - 20.0), 6.0);
+    float ad = step(0.82, fract(vSeed * 13.7)) * (1.0 - smoothstep(6.0 - fwidth(vL.y), 6.0 + fwidth(vL.y), abs(vL.y - vSc.y * fract(vSeed * 2.9) * 0.8 - 20.0)));
     col += ad * mix(uEdge, uW2, 0.5) * (1.4 + 0.6 * sin(uTime * 4.0 + vSeed * 20.0));
   } else col += uEdge * 0.05;
   gl_FragColor = vec4(col, 1.0);
@@ -306,14 +315,35 @@ export class World {
   spawnB(r: Rec) {
     r.on = !!this.flags.buildings;
     if (!r.on) return;
-    if (this.flags.center && Math.random() < 0.18) { r.x = rand(-50, 50); r.h = rand(30, 95); r.w = rand(16, 34); r.d = rand(16, 34); }
-    else { const side = Math.random() < 0.5 ? -1 : 1; const near = Math.random() < 0.55; r.x = side * (near ? rand(48, 140) : rand(140, 520)); r.h = near ? rand(90, 260) : rand(140, 420); r.w = rand(18, 46); r.d = rand(18, 52);
-      if (this.flags.roadTraffic) r.x = side * (near ? rand(60, 150) : rand(150, 520)); }
-    r.y = -140;
-    if (this.flags.signs && Math.abs(r.x) < 180 && Math.abs(r.x) > 40 && Math.random() < 0.3) {
+    for (let k = 0; ; k++) {
+      if (this.flags.center && Math.random() < 0.18) { r.x = rand(-50, 50); r.h = rand(30, 95); r.w = rand(16, 34); r.d = rand(16, 34); }
+      else { const side = Math.random() < 0.5 ? -1 : 1; const near = Math.random() < 0.55; r.x = side * (near ? rand(48, 140) : rand(140, 520)); r.h = near ? rand(90, 260) : rand(140, 420); r.w = rand(18, 46); r.d = rand(18, 52);
+        if (this.flags.roadTraffic) r.x = side * (near ? rand(60, 150) : rand(150, 520));
+        // the inner wall stays clear of the flight lane (player bounds ±30 plus mech and camera room)
+        if (Math.abs(r.x) - r.w / 2 < LANE_CLEAR) r.x = side * (LANE_CLEAR + r.w / 2); }
+      if (!this.coplanar(r)) break;
+      if (k >= 6) { r.on = false; return; }
+    }
+    // sink the base below the ground plane so the bottom faces never fight it
+    r.y = -141; r.h += 1;
+    if (this.flags.signs && Math.abs(r.x) < 180 && Math.abs(r.x) - r.w / 2 > LANE_CLEAR + 8 && Math.random() < 0.3) {
       const s = this.signs.find(s => !s.on); if (s) { s.on = true; s.z = r.z; const side = Math.sign(r.x);
         s.mesh.position.set(r.x - side * (r.w / 2 + 1), rand(-20, Math.min(60, r.y + r.h - 10)), r.z); s.mesh.rotation.set(0, -side * Math.PI / 2 + side * 0.35, 0); s.mesh.visible = true; }
     }
+  }
+  /** true when r overlaps a live building with a face (side or roof) within 1.5 m of one of its own: those z-fight */
+  coplanar(r: Rec) {
+    const E = 1.5;
+    for (const o of this.bRec) {
+      if (o === r || !o.on) continue;
+      if (Math.abs(r.x - o.x) > (r.w + o.w) / 2 + E || Math.abs(r.z - o.z) > (r.d + o.d) / 2 + E) continue;
+      const rx0 = r.x - r.w / 2, rx1 = r.x + r.w / 2, ox0 = o.x - o.w / 2, ox1 = o.x + o.w / 2;
+      const rz0 = r.z - r.d / 2, rz1 = r.z + r.d / 2, oz0 = o.z - o.d / 2, oz1 = o.z + o.d / 2;
+      if (Math.min(Math.abs(rx0 - ox0), Math.abs(rx0 - ox1), Math.abs(rx1 - ox0), Math.abs(rx1 - ox1)) < E) return true;
+      if (Math.min(Math.abs(rz0 - oz0), Math.abs(rz0 - oz1), Math.abs(rz1 - oz0), Math.abs(rz1 - oz1)) < E) return true;
+      if (Math.abs(r.h + 1 - o.h) < E) return true;
+    }
+    return false;
   }
   spawnT(r: Rec) {
     const road = this.flags.roadTraffic && Math.random() < 0.55;

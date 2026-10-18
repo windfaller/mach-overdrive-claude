@@ -28,6 +28,8 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
 const maxPR = Math.min(window.devicePixelRatio || 1, 1.5);
 let pr = TEST ? 0.5 : Math.min(maxPR, 1.25);
+// below ~0.75 the image goes soft and shimmers on phones; trade effects for resolution before going lower
+const PR_MIN = 0.75;
 renderer.setPixelRatio(pr);
 renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.95;
 renderer.outputColorSpace = THREE.SRGBColorSpace; renderer.info.autoReset = false;
@@ -40,7 +42,9 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 // ---- post
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+// MSAA on the HDR scene target: the canvas itself has antialias off because everything is drawn through the composer
+const MSAA = TEST ? 0 : Math.min(4, renderer.capabilities.maxSamples);
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: MSAA }));
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.6, 0.4, 1.05);
 composer.addPass(bloom);
@@ -328,7 +332,7 @@ function frame(now: number) {
   // draw put a fully black frame on screen every time the pixel ratio stepped (e.g. on heavy blade hits)
   if (adaptT > 1.5 && !TEST) {
     adaptT = 0;
-    if (frameAvg > 20 && pr > 0.6) { pr = Math.max(0.6, pr - 0.15); resize(); }
+    if (frameAvg > 20 && pr > PR_MIN) { pr = Math.max(PR_MIN, pr - 0.15); resize(); }
     else if (frameAvg < 14 && pr < maxPR) { pr = Math.min(maxPR, pr + 0.1); resize(); }
   }
   if (G.direct || (TEST && !params.has('post'))) renderer.render(scene, camera); else composer.render(rdt);
