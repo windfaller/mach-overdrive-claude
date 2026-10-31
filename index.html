@@ -108,7 +108,7 @@ canvas#game { position:fixed; inset:0; width:100%; height:100%; display:block; c
 #tag { position:absolute; left:22px; bottom:176px; font-family:'Orbitron'; font-size:12px; letter-spacing:.25em; color:#c8fbff; text-shadow:0 0 8px var(--cy); display:none; }
 .screen { position:fixed; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; text-align:center; background:radial-gradient(ellipse at center, rgba(4,10,24,.55), rgba(0,0,0,.92)); z-index:10; }
 .screen.on { display:flex; }
-.title { font-family:'Orbitron'; font-weight:900; font-size:clamp(40px, 8vw, 104px); letter-spacing:.12em; line-height:.95; color:#fff; text-shadow:0 0 20px var(--cy), 0 0 70px rgba(56,232,255,.6); }
+.title { font-family:'Orbitron'; font-weight:900; font-size:clamp(40px, min(8vw, 13vh), 104px); letter-spacing:.12em; line-height:.95; color:#fff; text-shadow:0 0 20px var(--cy), 0 0 70px rgba(56,232,255,.6); }
 .title em { font-style:normal; color:var(--cy); }
 .sub { font-size:clamp(16px, 2.2vw, 26px); letter-spacing:.6em; color:#ffd0f0; margin-top:10px; text-shadow:0 0 12px var(--mg); }
 .btn { pointer-events:auto; margin-top:34px; padding:14px 46px; font-family:'Orbitron'; font-weight:700; letter-spacing:.3em; font-size:16px; color:#fff; background:linear-gradient(90deg, rgba(56,232,255,.25), rgba(255,58,168,.25)); border:1px solid var(--cy); cursor:pointer; clip-path:polygon(12px 0,100% 0,calc(100% - 12px) 100%,0 100%); animation:pulse 1.6s ease-in-out infinite; }
@@ -158,7 +158,18 @@ html,body { touch-action:none; -webkit-touch-callout:none; -webkit-tap-highlight
 body.touchdev canvas#game { cursor:default; }
 body.touchdev #hpP { left:calc(22px + env(safe-area-inset-left)); bottom:auto; top:70px; zoom:.72; }
 body.touchdev #wpnP { display:none; } body.touchdev #scoreP { zoom:.72; }
-body.touchdev #prompt { bottom:auto; top:64%; }
+body.touchdev #prompt { top:auto; bottom:calc(10px + env(safe-area-inset-bottom)); max-width:46vw; font-size:15px; padding:6px 14px; }
+body.touchdev #big { top:32%; font-size:clamp(20px, 4vw, 40px); }
+/* short landscape screens (phones): title as two columns, key list left to the in-game prompts */
+@media (orientation:landscape) and (max-height: 520px) {
+  #title.on { display:grid; grid-template-columns:minmax(0, 1.25fr) minmax(0, 1fr); grid-auto-flow:row dense; align-content:center; align-items:center; column-gap:4vw;
+    padding:0 calc(5vw + env(safe-area-inset-right)) 0 calc(5vw + env(safe-area-inset-left)); text-align:left; }
+  #title .title { grid-column:1; grid-row:1 / span 2; font-size:min(6.2vw, 14vh); line-height:1.02; }
+  #title .sub { grid-column:1; grid-row:3; margin-top:6px; font-size:min(2.2vw, 5vh); letter-spacing:.3em; }
+  #title .btn, #title #showcase, #title .langs { grid-column:2; justify-self:center; }
+  #title .btn { margin-top:0; } #title .langs { margin-top:14px; }
+  #title .controls, #title .hint { display:none; }
+}
 #rotate { position:fixed; inset:0; z-index:40; display:none; flex-direction:column; align-items:center; justify-content:center; background:#04060c; color:#dff; font-family:'Orbitron'; letter-spacing:.2em; text-align:center; font-size:14px; }
 #rotate b { font-size:56px; color:var(--cy); text-shadow:0 0 18px var(--cy); animation:rot 1.8s ease-in-out infinite; }
 @keyframes rot { 0%,30% { transform:rotate(0); } 60%,100% { transform:rotate(-90deg); } }
@@ -183,7 +194,10 @@ body.touchdev #prompt { bottom:auto; top:64%; }
 #chCard .cn { font-family:'Orbitron'; font-size:13px; letter-spacing:.5em; color:var(--or); }
 #chCard .ct { font-family:'Orbitron','Rajdhani',sans-serif; font-weight:900; font-size:clamp(26px,5vw,58px); letter-spacing:.12em; color:#fff; text-shadow:0 0 22px var(--cy); margin-top:4px; }
 #chCard .cl { font-size:clamp(14px,1.8vw,20px); letter-spacing:.08em; color:#cfe; margin-top:6px; border-top:1px solid rgba(56,232,255,.5); padding-top:8px; }
-body.touchdev #comms { bottom:auto; top:150px; zoom:.85; }
+body.touchdev #comms { bottom:auto; top:calc(58px + env(safe-area-inset-top)); left:50%; width:min(440px, 46vw); transform:translate(-50%, -8px); zoom:1; padding:6px 10px 7px 6px; }
+body.touchdev #comms.on { transform:translateX(-50%); }
+body.touchdev #comms .cface { flex-basis:36px; height:36px; } body.touchdev #comms .cface svg { width:36px; height:36px; }
+body.touchdev #comms .ctxt { font-size:15px; } body.touchdev #comms .cwho { font-size:10px; }
 @media (max-width: 1100px), (max-height: 650px) { body:not(.touchdev) #comms { bottom:150px; zoom:.85; } }
 #fps { position:fixed; left:6px; top:4px; font:11px monospace; color:#6aa; z-index:20; display:none; }
 </style>

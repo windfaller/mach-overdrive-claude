@@ -186,6 +186,8 @@ function setPause(on: boolean) {
   G.paused = on; suspendAudio(on); showScreen(on ? 'pause' : null);
   if (on) { document.exitPointerLock?.(); menuSel.pause = 0; } else input.requestLock(canvas);
 }
+// switching apps or tabs mid-mission opens the pause menu instead of playing on unseen
+document.addEventListener('visibilitychange', () => { if (document.hidden && !BOT && !TEST) setPause(true); });
 function toTitle() { G.paused = false; suspendAudio(false); G.state = 'title'; hud.show(false); resetState(); G.state = 'title'; stopMusic(0.5); world.setSection('city', true); player.startTrails(); showScreen('title'); }
 $('startBtn').onclick = () => { sfx.ui(); const sc = params.get('showcase'); if (sc === 'benchmark') G.bench.start(); else if (sc && SHOWCASES.includes(sc)) startShowcase(sc); else startMission(+(params.get('ch') || 0)); };
 $('retryBtn').onclick = () => startMission(director.checkpoint);
